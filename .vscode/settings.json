@@ -1,0 +1,22 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/venv/Scripts/python.exe",
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}",
+    "${workspaceFolder}/venv/Lib/site-packages",
+    "C:/Users/Sakil Hossen/AppData/Roaming/Python/Python314/site-packages"
+  ],
+  "python.autoComplete.extraPaths": [
+    "${workspaceFolder}",
+    "${workspaceFolder}/venv/Lib/site-packages",
+    "C:/Users/Sakil Hossen/AppData/Roaming/Python/Python314/site-packages"
+  ],
+  "python.analysis.typeCheckingMode": "off",
+  "python.analysis.diagnosticSeverityOverrides": {
+    "reportMissingImports": "none",
+    "reportMissingModuleSource": "none",
+    "reportGeneralTypeIssues": "none",
+    "reportOptionalMemberAccess": "none",
+    "reportUnknownMemberType": "none"
+  },
+  "problems.decorations.enabled": false
+}
