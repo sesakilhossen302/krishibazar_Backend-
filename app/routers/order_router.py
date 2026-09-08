@@ -1,0 +1,253 @@
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from typing import List, Optional
+from datetime import datetime
+import uuid
+
+from app.database import get_db
+from app.models.order_model import Order
+from app.models.user_model import User
+from app.schemas.order_schema import (
+    OrderCreate,
+    OrderResponse,
+    OrderStatusUpdate,
+    TransportUpdate,
+    OrderDisputeCreate
+)
+from app.utils import get_current_user
+from app.routers.notification_router import send_in_app_notification
+
+router = APIRouter(prefix="/orders", tags=["Orders & Transport (অর্ডার ও পরিবহন)"])
+
+
+@router.get("/", response_model=List[OrderResponse])
+def get_orders(
+    buyer_id: Optional[str] = None,
+    farmer_id: Optional[str] = None,
+    status: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    List orders with optional filtering.
+    """
+    query = db.query(Order)
+    if buyer_id:
+        query = query.filter(Order.buyer_id == buyer_id)
+    if farmer_id:
+        query = query.filter(Order.farmer_id == farmer_id)
+    if status:
+        query = query.filter(Order.order_status == status)
+    return query.order_by(Order.created_at.desc()).all()
+
+
+@router.get("/my-orders", response_model=List[OrderResponse])
+def get_my_orders(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all orders associated with the logged-in user (as Buyer or as Farmer).
+    """
+    return db.query(Order).filter(
+        (Order.buyer_id == current_user.id) | (Order.farmer_id == current_user.id)
+    ).order_by(Order.created_at.desc()).all()
+
+
+@router.get("/{order_id}", response_model=OrderResponse)
+def get_order_by_id(order_id: str, db: Session = Depends(get_db)):
+    """
+    Get order details by order ID.
+    """
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="অর্ডারটি পাওয়া যায়নি।")
+    return order
+
+
+@router.post("/", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
+def create_order(
+    order_in: OrderCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Directly create a new produce order.
+    """
+    farmer = db.query(User).filter(User.id == order_in.farmer_id).first()
+    if not farmer:
+        raise HTTPException(status_code=404, detail="কৃষক পাওয়া যায়নি।")
+
+    new_id = f"ord_{uuid.uuid4().hex[:8]}"
+    order_num = f"KB-{uuid.uuid4().hex[:6].upper()}"
+    total = order_in.quantity * order_in.price_per_unit
+    deposit = total * 0.20  # 20% deposit
+
+    db_order = Order(
+        id=new_id,
+        order_number=order_num,
+        buyer_id=current_user.id,
+        buyer_name=current_user.name,
+        buyer_business_name=current_user.business_name or "পাইকারি আড়ত",
+        buyer_phone=current_user.phone,
+        farmer_id=farmer.id,
+        farmer_name=farmer.name,
+        farmer_phone=farmer.phone,
+        farmer_location=farmer.district,
+        product_title=order_in.product_title,
+        category=order_in.category,
+        quantity=order_in.quantity,
+        unit=order_in.unit,
+        price_per_unit=order_in.price_per_unit,
+        total_amount=total,
+        deposit_required=deposit,
+        is_deposit_paid=False,
+        order_status="pending",
+        delivery_location=order_in.delivery_location,
+        expected_delivery_date=order_in.expected_delivery_date,
+        pickup_location=farmer.address or farmer.district,
+        collection_center=f"{farmer.district} কালেকশন হাব",
+        created_at=datetime.now().strftime("%Y-%m-%d %H:%M")
+    )
+    db.add(db_order)
+    db.commit()
+    db.refresh(db_order)
+
+    # Notify farmer
+    send_in_app_notification(
+        db=db,
+        user_id=farmer.id,
+        title="নতুন অর্ডার এসেছে!",
+        message=f"{current_user.name} আপনার {order_in.quantity} {order_in.unit} {order_in.product_title} এর নতুন অর্ডার দিয়েছেন। অর্ডার নং: {order_num}",
+        notification_type="order",
+        related_id=db_order.id
+    )
+
+    return db_order
+
+
+@router.post("/{order_id}/pay-deposit", response_model=OrderResponse)
+def pay_deposit(
+    order_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Pay 20% security deposit to KrishiBazar Escrow.
+    """
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="অর্ডারটি পাওয়া যায়নি।")
+
+    order.is_deposit_paid = True
+    order.order_status = "paymentConfirmed"
+    db.commit()
+    db.refresh(order)
+
+    # Notify farmer and buyer
+    send_in_app_notification(
+        db=db,
+        user_id=order.farmer_id,
+        title="💰 অর্ডারের ডিপোজিট পরিশোধিত!",
+        message=f"অর্ডার নং {order.order_number} এর ২০% জামানত (৳{order.deposit_required:,.2f}) কৃষিবাজার এসক্রোতে জমা হয়েছে। পণ্য প্রস্তুত করুন।",
+        notification_type="order",
+        related_id=order.id
+    )
+
+    return order
+
+
+@router.patch("/{order_id}/status", response_model=OrderResponse)
+def update_order_status(
+    order_id: str,
+    status_update: OrderStatusUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update order lifecycle status (e.g. processing, pickupReady, inTransit, delivered, completed, cancelled).
+    """
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="অর্ডারটি পাওয়া যায়নি।")
+
+    order.order_status = status_update.order_status
+
+    if status_update.order_status == "completed":
+        # Increment completed orders stats for farmer and buyer
+        farmer = db.query(User).filter(User.id == order.farmer_id).first()
+        buyer = db.query(User).filter(User.id == order.buyer_id).first()
+        if farmer:
+            farmer.completed_orders += 1
+        if buyer:
+            buyer.completed_orders += 1
+
+    db.commit()
+    db.refresh(order)
+
+    # Notify counter-party
+    target_user_id = order.buyer_id if current_user.id == order.farmer_id else order.farmer_id
+    send_in_app_notification(
+        db=db,
+        user_id=target_user_id,
+        title=f"অর্ডার স্ট্যাটাস আপডেট: {status_update.order_status}",
+        message=f"অর্ডার নং {order.order_number} এর স্ট্যাটাস পরিবর্তিত হয়ে '{status_update.order_status}' হয়েছে।",
+        notification_type="order",
+        related_id=order.id
+    )
+
+    return order
+
+
+@router.patch("/{order_id}/transport", response_model=OrderResponse)
+def update_transport_details(
+    order_id: str,
+    transport_in: TransportUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update transport & vehicle tracking information for the order.
+    """
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="অর্ডারটি পাওয়া যায়নি।")
+
+    update_data = transport_in.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        if value is not None:
+            setattr(order, field, value)
+
+    db.commit()
+    db.refresh(order)
+    return order
+
+
+@router.post("/{order_id}/dispute", response_model=OrderResponse)
+def raise_order_dispute(
+    order_id: str,
+    dispute_in: OrderDisputeCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Raise a dispute for safety and mediation.
+    """
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="অর্ডারটি পাওয়া যায়নি।")
+
+    order.has_dispute = True
+    order.order_status = "disputed"
+    db.commit()
+    db.refresh(order)
+
+    send_in_app_notification(
+        db=db,
+        user_id=order.farmer_id if current_user.id == order.buyer_id else order.buyer_id,
+        title="⚠️ অর্ডার নিয়ে অভিযোগ/ডিসপিউট দাখিল হয়েছে",
+        message=f"অর্ডার নং {order.order_number} এ অভিযোগ এসেছে: {dispute_in.reason}। কৃষিবাজার সাপোর্ট টিম পর্যালোচনা করছে।",
+        notification_type="order",
+        related_id=order.id
+    )
+
+    return order
