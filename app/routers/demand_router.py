@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime
+from jose import JWTError, jwt
 import uuid
 
+from app.config import settings
 from app.database import get_db
 from app.models.demand_model import Demand, Offer
 from app.models.order_model import Order
@@ -14,6 +16,29 @@ from app.utils import get_current_user
 from app.routers.notification_router import send_in_app_notification
 
 router = APIRouter(prefix="/demands", tags=["Demands & Offers (চাহিদা ও দরপত্র)"])
+
+
+def resolve_current_user(
+    authorization: Optional[str] = Header(None),
+    user_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+) -> Optional[User]:
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ")[1].strip()
+        try:
+            p = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            uid = p.get("sub")
+            if uid:
+                user = db.query(User).filter(User.id == str(uid).strip()).first()
+                if user:
+                    return user
+        except Exception:
+            pass
+    if user_id and str(user_id).strip():
+        user = db.query(User).filter(User.id == str(user_id).strip()).first()
+        if user:
+            return user
+    return None
 
 
 @router.get("/", response_model=List[DemandResponse])
@@ -28,27 +53,34 @@ def get_demands(
     List all active demands from buyers.
     """
     query = db.query(Demand).filter(Demand.status == "active")
-    if buyer_id:
-        query = query.filter(Demand.buyer_id == buyer_id)
+    if buyer_id and buyer_id.strip():
+        query = query.filter(Demand.buyer_id == buyer_id.strip())
     if category and category != "all":
         query = query.filter(Demand.category == category)
-    if district:
-        query = query.filter(Demand.required_location.contains(district))
-    if search:
-        query = query.filter(Demand.product_title.contains(search))
+    if district and district.strip():
+        query = query.filter(Demand.required_location.contains(district.strip()))
+    if search and search.strip():
+        query = query.filter(Demand.product_title.contains(search.strip()))
     return query.order_by(Demand.created_at.desc()).all()
 
 
 @router.get("/my-demands", response_model=List[DemandResponse])
 def get_my_demands(
-    current_user: User = Depends(get_current_user),
+    authorization: Optional[str] = Header(None),
+    buyer_id: Optional[str] = Query(None),
+    user_id: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
     """
     List demands created by currently logged-in buyer.
+    Supports Bearer token or buyer_id / user_id query parameters.
     """
+    user = resolve_current_user(authorization, buyer_id or user_id, db)
+    target_id = user.id if user else (buyer_id or user_id)
+    if not target_id or not str(target_id).strip():
+        return []
     return db.query(Demand).filter(
-        Demand.buyer_id == current_user.id
+        Demand.buyer_id == str(target_id).strip()
     ).order_by(Demand.created_at.desc()).all()
 
 
@@ -66,20 +98,28 @@ def get_demand_by_id(demand_id: str, db: Session = Depends(get_db)):
 @router.post("/", response_model=DemandResponse, status_code=status.HTTP_201_CREATED)
 def create_demand(
     demand_in: DemandCreate,
-    current_user: User = Depends(get_current_user),
+    authorization: Optional[str] = Header(None),
+    user_id: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
     """
     Buyer creates a new demand for bulk produce.
     """
+    user = resolve_current_user(authorization, user_id, db)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="চাহিদা পোস্ট করতে অনুগ্রহ করে লগইন করুন।"
+        )
+
     new_id = f"dem_{uuid.uuid4().hex[:8]}"
     db_demand = Demand(
         id=new_id,
-        buyer_id=current_user.id,
-        buyer_name=current_user.name,
-        buyer_business_name=current_user.business_name or "পাইকারি আড়ত",
-        buyer_district=current_user.district,
-        buyer_verified=(current_user.verification_status == "verified"),
+        buyer_id=user.id,
+        buyer_name=user.name,
+        buyer_business_name=user.business_name or "পাইকারি আড়ত",
+        buyer_district=user.district or "ঢাকা",
+        buyer_verified=(user.verification_status == "verified"),
         product_title=demand_in.product_title,
         category=demand_in.category,
         required_quantity=demand_in.required_quantity,
@@ -98,14 +138,54 @@ def create_demand(
     db.add(db_demand)
     db.commit()
     db.refresh(db_demand)
+
+    # In-app notification to farmers about the new bulk demand
+    try:
+        farmers = db.query(User).filter(User.role == "farmer").limit(20).all()
+        for f in farmers:
+            send_in_app_notification(
+                db=db,
+                user_id=f.id,
+                title="নতুন পাইকারি চাহিদা পোস্ট হয়েছে! 📢",
+                message=f"{db_demand.buyer_business_name} {db_demand.required_quantity} {db_demand.unit} {db_demand.product_title} ক্রয় করতে চান। সরাসরি দরপত্র (Offer) জমা দিন!",
+                notification_type="demand",
+                related_id=db_demand.id
+            )
+    except Exception as e:
+        print(f"Error sending demand alert notification: {e}")
+
     return db_demand
+
+
+@router.delete("/{demand_id}")
+def delete_demand(
+    demand_id: str,
+    authorization: Optional[str] = Header(None),
+    user_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Delete / Cancel a demand by ID.
+    """
+    demand = db.query(Demand).filter(Demand.id == demand_id).first()
+    if not demand:
+        raise HTTPException(status_code=404, detail="চাহিদাপত্র পাওয়া যায়নি।")
+
+    user = resolve_current_user(authorization, user_id, db)
+    if user and user.role != "admin" and demand.buyer_id != user.id:
+        raise HTTPException(status_code=403, detail="এই চাহিদা মুছে ফেলার অনুমতি নেই।")
+
+    db.delete(demand)
+    db.commit()
+    return {"success": True, "message": "চাহিদা সফলভাবে মুছে ফেলা হয়েছে।"}
 
 
 @router.patch("/{demand_id}", response_model=DemandResponse)
 def update_demand(
     demand_id: str,
     demand_update: DemandUpdate,
-    current_user: User = Depends(get_current_user),
+    authorization: Optional[str] = Header(None),
+    user_id: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
     """
@@ -114,7 +194,9 @@ def update_demand(
     demand = db.query(Demand).filter(Demand.id == demand_id).first()
     if not demand:
         raise HTTPException(status_code=404, detail="চাহিদা পাওয়া যায়নি।")
-    if demand.buyer_id != current_user.id:
+
+    user = resolve_current_user(authorization, user_id, db)
+    if user and user.role != "admin" and demand.buyer_id != user.id:
         raise HTTPException(status_code=403, detail="অনুমতি নেই।")
 
     update_data = demand_update.model_dump(exclude_unset=True)
