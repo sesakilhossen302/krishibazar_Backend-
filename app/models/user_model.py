@@ -52,4 +52,6 @@ class User(Base):
     rating = Column(Float, default=0.0)
     reviews_count = Column(Integer, default=0)
     payment_reliability = Column(Integer, default=98)
+    total_earnings = Column(Float, default=0.0)
     is_active = Column(Boolean, default=True)
+

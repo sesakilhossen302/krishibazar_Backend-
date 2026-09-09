@@ -158,5 +158,14 @@ class UserResponse(BaseModel):
     reviews_count: int
     payment_reliability: int
 
+    # Dynamic Dashboard & Activity Stats
+    products_count: Optional[int] = 0
+    active_products_count: Optional[int] = 0
+    offers_count: Optional[int] = 0
+    active_orders_count: Optional[int] = 0
+    total_earnings: Optional[float] = 0.0
+    total_spent: Optional[float] = 0.0
+
     class Config:
         from_attributes = True
+

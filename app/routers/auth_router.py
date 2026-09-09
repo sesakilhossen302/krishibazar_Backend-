@@ -243,7 +243,7 @@ def signup(user_data: UserSignup, db: Session = Depends(get_db)):
         nid_status="pending",
         nid_rejection_note="",
         completed_orders=0,
-        rating=5.0,
+        rating=0.0,
         reviews_count=0,
         payment_reliability=100
     )
@@ -511,10 +511,11 @@ def change_password(
 
 
 # ----------------- User Profile / Session -----------------
-
 @router.get("/me", response_model=UserResponse)
-def get_me(current_user: User = Depends(get_current_user)):
+def get_me(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
-    Get profile data of the currently logged in user.
+    Get profile data of the currently logged in user with real-time activity stats.
     """
-    return current_user
+    from app.routers.user_router import serialize_user_with_stats
+    return serialize_user_with_stats(current_user, db)
+

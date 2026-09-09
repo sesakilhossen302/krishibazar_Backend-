@@ -12,3 +12,5 @@ uploads/*
 test_*.py
 check_*.py
 reset_*.py
+migrate_*.py
+

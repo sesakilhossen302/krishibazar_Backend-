@@ -15,6 +15,106 @@ from app.routers.notification_router import send_in_app_notification
 router = APIRouter(prefix="/users", tags=["User Profile & Dashboard (প্রোফাইল ও ড্যাশবোর্ড)"])
 
 
+def compute_user_stats(user: User, db: Session) -> dict:
+    role = (user.role or "farmer").strip().lower()
+    if role == "farmer":
+        products_count = db.query(Product).filter(Product.farmer_id == user.id).count()
+        active_products_count = db.query(Product).filter(
+            Product.farmer_id == user.id,
+            Product.status == "active"
+        ).count()
+        offers_count = db.query(Offer).filter(Offer.farmer_id == user.id).count()
+        farmer_orders = db.query(Order).filter(Order.farmer_id == user.id).all()
+        active_orders = sum(1 for o in farmer_orders if o.order_status not in ["completed", "cancelled"])
+        completed_orders = sum(1 for o in farmer_orders if o.order_status == "completed")
+        order_earnings = sum(o.total_amount for o in farmer_orders if (o.is_deposit_paid or o.order_status == "completed"))
+        total_earnings = max(order_earnings, getattr(user, "total_earnings", 0.0) or 0.0)
+
+        rating = float(user.rating or 0.0)
+        reviews_count = int(user.reviews_count or 0)
+
+        return {
+            "products_count": products_count,
+            "active_products_count": active_products_count,
+            "offers_count": offers_count,
+            "active_orders_count": active_orders,
+            "completed_orders": max(completed_orders, user.completed_orders or 0),
+            "total_earnings": float(total_earnings),
+            "total_spent": 0.0,
+            "rating": float(rating),
+            "reviews_count": int(reviews_count),
+        }
+    else:  # buyer
+        demands_count = db.query(Demand).filter(Demand.buyer_id == user.id).count()
+        active_demands = db.query(Demand).filter(
+            Demand.buyer_id == user.id,
+            Demand.status == "active"
+        ).count()
+        buyer_demand_ids = [d[0] for d in db.query(Demand.id).filter(Demand.buyer_id == user.id).all()]
+        offers_count = db.query(Offer).filter(Offer.demand_id.in_(buyer_demand_ids)).count() if buyer_demand_ids else 0
+        buyer_orders = db.query(Order).filter(Order.buyer_id == user.id).all()
+        active_orders = sum(1 for o in buyer_orders if o.order_status not in ["completed", "cancelled"])
+        completed_orders = sum(1 for o in buyer_orders if o.order_status == "completed")
+        order_spent = sum(o.total_amount for o in buyer_orders if (o.is_deposit_paid or o.order_status == "completed"))
+        total_spent = max(order_spent, getattr(user, "total_earnings", 0.0) or 0.0)
+
+        rating = float(user.rating or 0.0)
+        reviews_count = int(user.reviews_count or 0)
+
+
+        return {
+            "products_count": demands_count,
+            "active_products_count": active_demands,
+            "offers_count": offers_count,
+            "active_orders_count": active_orders,
+            "completed_orders": max(completed_orders, user.completed_orders or 0),
+            "total_earnings": 0.0,
+            "total_spent": float(total_spent),
+            "rating": float(rating),
+            "reviews_count": int(reviews_count),
+        }
+
+
+def serialize_user_with_stats(user: User, db: Session) -> UserResponse:
+    stats = compute_user_stats(user, db)
+    return UserResponse(
+        id=user.id,
+        role=user.role,
+        name=user.name,
+        phone=user.phone,
+        email=user.email or "",
+        photo_url=user.photo_url or "",
+        district=user.district or "",
+        address=user.address or "",
+        nid_or_doc=user.nid_or_doc or "",
+        nid_front_url=user.nid_front_url or "",
+        nid_back_url=user.nid_back_url or "",
+        farmer_type=user.farmer_type or "",
+        upazila=user.upazila or "",
+        union=user.union or "",
+        krishi_card_doc_url=user.krishi_card_doc_url or "",
+        business_name=user.business_name or "",
+        business_type=user.business_type or "",
+        arot_location=user.arot_location or "",
+        trade_info=user.trade_info or "",
+        trade_license_url=user.trade_license_url or "",
+        verification_status=user.verification_status or "pending",
+        admin_note=user.admin_note or "",
+        nid_status=user.nid_status or "pending",
+        nid_rejection_note=user.nid_rejection_note or "",
+        completed_orders=stats["completed_orders"],
+        rating=stats["rating"],
+        reviews_count=stats["reviews_count"],
+        payment_reliability=user.payment_reliability or 98,
+        products_count=stats["products_count"],
+        active_products_count=stats["active_products_count"],
+        offers_count=stats["offers_count"],
+        active_orders_count=stats["active_orders_count"],
+        total_earnings=stats["total_earnings"],
+        total_spent=stats["total_spent"],
+    )
+
+
 @router.get("/", response_model=List[UserResponse])
 def get_all_users(
     role: Optional[str] = None,
@@ -23,8 +123,8 @@ def get_all_users(
     db: Session = Depends(get_db)
 ):
     """
-    Get all registered users with all their details (NID, documents, location, photo, etc.)
-    for Admin Dashboard.
+    Get all registered users with all their details and live activity stats
+    (products, offers, earnings, rating, reviews) for Admin Dashboard.
     """
     query = db.query(User)
 
@@ -44,7 +144,9 @@ def get_all_users(
             (User.business_name.ilike(term))
         )
 
-    return query.order_by(User.id.desc()).all()
+    users = query.order_by(User.id.desc()).all()
+    return [serialize_user_with_stats(u, db) for u in users]
+
 
 
 @router.patch("/{user_id}/status", response_model=UserResponse)
@@ -171,7 +273,7 @@ def update_user_verification_status(
                 related_id=user.id
             )
 
-    return user
+    return serialize_user_with_stats(user, db)
 
 
 @router.post("/reupload-nid", response_model=UserResponse)
@@ -237,17 +339,25 @@ def reupload_nid_documents(
         related_id=user.id
     )
 
-    return user
+    return serialize_user_with_stats(user, db)
 
 
 
 
 @router.get("/profile", response_model=UserResponse)
-def get_user_profile(current_user: User = Depends(get_current_user)):
+def get_user_profile(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
     Get full profile data for current authenticated user (Farmer / Buyer).
     """
-    return current_user
+    return serialize_user_with_stats(current_user, db)
+
+
+@router.get("/me", response_model=UserResponse)
+def get_user_me(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Get profile data with live stats for /users/me endpoint.
+    """
+    return serialize_user_with_stats(current_user, db)
 
 
 @router.get("/profile/{user_id}", response_model=UserResponse)
@@ -261,7 +371,7 @@ def get_user_by_id(user_id: str, db: Session = Depends(get_db)):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="ব্যবহারকারী পাওয়া যায়নি।"
         )
-    return user
+    return serialize_user_with_stats(user, db)
 
 
 @router.get("/by-identifier", response_model=UserResponse)
@@ -286,7 +396,7 @@ def get_user_by_identifier(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="ব্যবহারকারী পাওয়া যায়নি।"
         )
-    return user
+    return serialize_user_with_stats(user, db)
 
 
 @router.patch("/profile", response_model=UserResponse)
@@ -307,7 +417,7 @@ def update_user_profile(
     db.add(current_user)
     db.commit()
     db.refresh(current_user)
-    return current_user
+    return serialize_user_with_stats(current_user, db)
 
 
 @router.patch("/profile/{user_id}", response_model=UserResponse)
@@ -333,7 +443,8 @@ def update_user_profile_by_id(
     db.add(user)
     db.commit()
     db.refresh(user)
-    return user
+    return serialize_user_with_stats(user, db)
+
 
 
 @router.get("/dashboard-stats")
