@@ -70,8 +70,11 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 - **`GET /api/v1/auth/me`**: বর্তমান লগইন থাকা ব্যবহারকারীর প্রোফাইল তথ্য।
 
 ### ২. User Profile & Dashboard APIs (`/api/v1/users`)
+- **`GET /api/v1/users/`**: সমস্ত ব্যবহারকারীর তালিকা এবং ফিল্টারিং (Admin / Management)।
 - **`GET /api/v1/users/profile`**: সম্পূর্ণ প্রোফাইল তথ্য দেখা।
 - **`PATCH /api/v1/users/profile`**: নাম, জেলা, ঠিকানা, ট্রেড লাইসেন্স বা ছবি আপডেট।
+- **`PATCH /api/v1/users/{user_id}/status`**: ব্যবহারকারীর ভেরিফিকেশন স্ট্যাটাস, অ্যাডমিন নোট এবং NID স্ট্যাটাস অনুমোদন/প্রত্যাখ্যান করা।
+- **`POST /api/v1/users/reupload-nid`**: NID প্রত্যাখ্যাত হলে পুনরায় নতুন NID ছবি ও তথ্য সাবমিট করা।
 - **`GET /api/v1/users/dashboard-stats`**: কৃষক ও পাইকারদের জন্য রিয়েলটাইম পরিসংখ্যান (মোট অর্ডার, সক্রিয় পণ্য/চাহিদা, আয়/ব্যয় ইত্যাদি)।
 
 ### ৩. Product APIs (`/api/v1/products`)

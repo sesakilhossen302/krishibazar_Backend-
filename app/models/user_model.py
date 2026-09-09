@@ -45,6 +45,9 @@ class User(Base):
 
     # Verification & Rating Stats
     verification_status = Column(String, default=VerificationStatus.VERIFIED)
+    admin_note = Column(String, nullable=True, default="")
+    nid_status = Column(String, nullable=True, default="pending")  # pending, verified, rejected
+    nid_rejection_note = Column(String, nullable=True, default="")
     completed_orders = Column(Integer, default=0)
     rating = Column(Float, default=0.0)
     reviews_count = Column(Integer, default=0)

@@ -100,6 +100,12 @@ class UserUpdate(BaseModel):
     trade_info: Optional[str] = None
     trade_license_url: Optional[str] = None
 
+    # Verification and Notes
+    verification_status: Optional[str] = None
+    admin_note: Optional[str] = None
+    nid_status: Optional[str] = None
+    nid_rejection_note: Optional[str] = None
+
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -141,6 +147,9 @@ class UserResponse(BaseModel):
 
     # Verification & Stats
     verification_status: str
+    admin_note: Optional[str] = ""
+    nid_status: Optional[str] = "pending"
+    nid_rejection_note: Optional[str] = ""
     completed_orders: int
     rating: float
     reviews_count: int

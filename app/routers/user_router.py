@@ -51,7 +51,8 @@ def update_user_verification_status(
     db: Session = Depends(get_db)
 ):
     """
-    Update verification status of a user (verified, rejected, pending) from Admin Dashboard.
+    Update verification status of a user (verified, rejected, pending, in_progress, suspended)
+    and NID status (verified, rejected, pending) from Admin Dashboard.
     """
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -63,11 +64,50 @@ def update_user_verification_status(
     new_status = status_update.get("verification_status") or status_update.get("status")
     if new_status:
         user.verification_status = new_status.strip().lower()
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+        
+    if "admin_note" in status_update:
+        user.admin_note = status_update.get("admin_note") or ""
+        
+    if "nid_status" in status_update:
+        user.nid_status = (status_update.get("nid_status") or "").strip().lower()
+        
+    if "nid_rejection_note" in status_update:
+        user.nid_rejection_note = status_update.get("nid_rejection_note") or ""
 
+    db.add(user)
+    db.commit()
+    db.refresh(user)
     return user
+
+
+@router.post("/reupload-nid", response_model=UserResponse)
+def reupload_nid_documents(
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Allow user to re-upload their NID front and back images when rejected by admin.
+    """
+    nid_front = payload.get("nid_front_url")
+    nid_back = payload.get("nid_back_url")
+    nid_number = payload.get("nid_or_doc")
+    
+    if nid_front:
+        current_user.nid_front_url = nid_front
+    if nid_back:
+        current_user.nid_back_url = nid_back
+    if nid_number:
+        current_user.nid_or_doc = nid_number
+        
+    current_user.nid_status = "pending"
+    current_user.nid_rejection_note = ""
+    current_user.verification_status = "in_progress"
+    
+    db.add(current_user)
+    db.commit()
+    db.refresh(current_user)
+    return current_user
 
 
 
