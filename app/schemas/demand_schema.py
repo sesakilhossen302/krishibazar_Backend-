@@ -34,6 +34,8 @@ class DemandResponse(BaseModel):
     buyer_business_name: str
     buyer_district: str
     buyer_verified: bool
+    buyer_photo_url: Optional[str] = ""
+    buyer_phone: Optional[str] = ""
     product_title: str
     category: str
     required_quantity: float

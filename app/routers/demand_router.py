@@ -41,6 +41,35 @@ def resolve_current_user(
     return None
 
 
+def serialize_demand(d: Demand, user: Optional[User] = None) -> DemandResponse:
+    photo_url = user.photo_url if user and user.photo_url else ""
+    phone = user.phone if user and user.phone else ""
+    return DemandResponse(
+        id=d.id,
+        buyer_id=d.buyer_id,
+        buyer_name=d.buyer_name,
+        buyer_business_name=d.buyer_business_name,
+        buyer_district=d.buyer_district,
+        buyer_verified=d.buyer_verified,
+        buyer_photo_url=photo_url,
+        buyer_phone=phone,
+        product_title=d.product_title,
+        category=d.category,
+        required_quantity=d.required_quantity,
+        fulfilled_quantity=d.fulfilled_quantity,
+        unit=d.unit,
+        required_location=d.required_location,
+        required_date=d.required_date,
+        min_expected_price=d.min_expected_price,
+        max_expected_price=d.max_expected_price,
+        quality_grade=d.quality_grade,
+        additional_note=d.additional_note or "",
+        status=d.status,
+        offers_count=d.offers_count,
+        created_at=d.created_at,
+    )
+
+
 @router.get("/", response_model=List[DemandResponse])
 def get_demands(
     buyer_id: Optional[str] = None,
@@ -61,7 +90,11 @@ def get_demands(
         query = query.filter(Demand.required_location.contains(district.strip()))
     if search and search.strip():
         query = query.filter(Demand.product_title.contains(search.strip()))
-    return query.order_by(Demand.created_at.desc()).all()
+
+    demands = query.order_by(Demand.created_at.desc()).all()
+    buyer_ids = {d.buyer_id for d in demands if d.buyer_id}
+    user_map = {u.id: u for u in db.query(User).filter(User.id.in_(buyer_ids)).all()} if buyer_ids else {}
+    return [serialize_demand(d, user_map.get(d.buyer_id)) for d in demands]
 
 
 @router.get("/my-demands", response_model=List[DemandResponse])
@@ -79,9 +112,10 @@ def get_my_demands(
     target_id = user.id if user else (buyer_id or user_id)
     if not target_id or not str(target_id).strip():
         return []
-    return db.query(Demand).filter(
+    demands = db.query(Demand).filter(
         Demand.buyer_id == str(target_id).strip()
     ).order_by(Demand.created_at.desc()).all()
+    return [serialize_demand(d, user) for d in demands]
 
 
 @router.get("/{demand_id}", response_model=DemandResponse)
@@ -92,7 +126,8 @@ def get_demand_by_id(demand_id: str, db: Session = Depends(get_db)):
     demand = db.query(Demand).filter(Demand.id == demand_id).first()
     if not demand:
         raise HTTPException(status_code=404, detail="চাহিদাপত্র পাওয়া যায়নি।")
-    return demand
+    u = db.query(User).filter(User.id == demand.buyer_id).first()
+    return serialize_demand(demand, u)
 
 
 @router.post("/", response_model=DemandResponse, status_code=status.HTTP_201_CREATED)
@@ -154,7 +189,7 @@ def create_demand(
     except Exception as e:
         print(f"Error sending demand alert notification: {e}")
 
-    return db_demand
+    return serialize_demand(db_demand, user)
 
 
 @router.delete("/{demand_id}")
