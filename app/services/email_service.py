@@ -197,7 +197,7 @@ def send_otp_via_gmail(to_email: str, otp_code: str, user_name: str = "সম্
     except Exception as e:
         err_msg = f"Failed to send email to {to_email}: {str(e)}"
         logger.error(err_msg)
-        print(f"❌ [SMTP ERROR]: {err_msg}")
+        print(f"[SMTP ERROR]: {err_msg}")
         return {
             "success": False,
             "mode": "error",

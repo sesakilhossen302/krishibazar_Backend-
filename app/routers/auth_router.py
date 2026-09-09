@@ -76,10 +76,16 @@ def send_otp(req: SendOtpRequest, db: Session = Depends(get_db)):
     )
 
     print("=" * 70)
-    print(f"🚀 [API HIT /auth/send-otp] Email: {clean_email}, Name: {req.name}")
-    print(f"🔑 [GENERATED OTP CODE]: >>> {otp_code} <<<")
-    print(f"📩 [SMTP RESULT]: {email_result}")
+    print(f"[API HIT /auth/send-otp] Email: {clean_email}, Name: {req.name}")
+    print(f"[GENERATED OTP CODE]: >>> {otp_code} <<<")
+    print(f"[SMTP RESULT]: {email_result}")
     print("=" * 70)
+
+    if email_result.get("success") == False:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="জিমেইলে ওটিপি পাঠানো সম্ভব হয়নি। দয়া করে সঠিক ও সক্রিয় জিমেইল ঠিকানা দিন।"
+        )
 
     return OtpResponse(
         success=True,
@@ -87,7 +93,7 @@ def send_otp(req: SendOtpRequest, db: Session = Depends(get_db)):
         email=clean_email,
         purpose=req.purpose,
         expires_in_seconds=300,
-        otp_code=otp_code  # Provided for fast testing & dev feedback
+        otp_code=otp_code
     )
 
 
