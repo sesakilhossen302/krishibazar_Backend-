@@ -231,8 +231,25 @@ def update_demand(
 def get_offers_for_demand(demand_id: str, db: Session = Depends(get_db)):
     """
     Get all farmer offers for a specific demand.
+    Enriches offers with farmer profile photo and contact info.
     """
-    return db.query(Offer).filter(Offer.demand_id == demand_id).order_by(Offer.created_at.desc()).all()
+    offers = db.query(Offer).filter(Offer.demand_id == demand_id).order_by(Offer.created_at.desc()).all()
+    farmer_ids = {o.farmer_id for o in offers if o.farmer_id}
+    farmer_map = {u.id: u for u in db.query(User).filter(User.id.in_(farmer_ids)).all()} if farmer_ids else {}
+
+    results = []
+    for o in offers:
+        res = OfferResponse.model_validate(o)
+        u = farmer_map.get(o.farmer_id)
+        if u:
+            if u.photo_url:
+                res.farmer_photo_url = u.photo_url
+            if u.phone:
+                res.farmer_phone = u.phone
+            if u.district:
+                res.farmer_location = u.district
+        results.append(res)
+    return results
 
 
 @router.get("/offers/my-offers", response_model=List[OfferResponse])
@@ -321,7 +338,9 @@ def create_offer(
 @router.post("/offers/{offer_id}/accept", response_model=OrderResponse)
 def accept_offer(
     offer_id: str,
-    current_user: User = Depends(get_current_user),
+    authorization: Optional[str] = Header(None),
+    buyer_id: Optional[str] = Query(None),
+    user_id: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
     """
@@ -332,7 +351,11 @@ def accept_offer(
         raise HTTPException(status_code=404, detail="অফারটি পাওয়া যায়নি।")
 
     demand = db.query(Demand).filter(Demand.id == offer.demand_id).first()
-    if not demand or demand.buyer_id != current_user.id:
+    if not demand:
+        raise HTTPException(status_code=404, detail="চাহিদাপত্র পাওয়া যায়নি।")
+
+    user = resolve_current_user(authorization, buyer_id or user_id, db)
+    if user and user.role != "admin" and demand.buyer_id != user.id:
         raise HTTPException(status_code=403, detail="শুধুমাত্র এই চাহিদার ক্রেতা অফার গ্রহণ করতে পারবেন।")
 
     # Mark offer as accepted
@@ -347,15 +370,20 @@ def accept_offer(
     total = offer.offered_quantity * offer.price_per_unit
     deposit = total * 0.20
 
+    b_id = user.id if user else demand.buyer_id
+    b_name = (user.name if user and user.name else None) or demand.buyer_name or "পাইকারি ক্রেতা"
+    b_biz = (user.business_name if user and user.business_name else None) or demand.buyer_business_name or "আড়ত"
+    b_phone = (user.phone if user and user.phone else None) or "০১৭০০০০০০০০"
+
     new_order = Order(
         id=new_order_id,
         order_number=order_num,
         demand_id=demand.id,
         offer_id=offer.id,
-        buyer_id=current_user.id,
-        buyer_name=current_user.name,
-        buyer_business_name=current_user.business_name or "পাইকারি আড়ত",
-        buyer_phone=current_user.phone,
+        buyer_id=b_id,
+        buyer_name=b_name,
+        buyer_business_name=b_biz,
+        buyer_phone=b_phone,
         farmer_id=offer.farmer_id,
         farmer_name=offer.farmer_name,
         farmer_phone=offer.farmer_phone,

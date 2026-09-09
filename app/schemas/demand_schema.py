@@ -76,6 +76,7 @@ class OfferResponse(BaseModel):
     farmer_phone: str
     farmer_location: str
     farmer_verified: bool
+    farmer_photo_url: Optional[str] = ""
     offered_quantity: float
     unit: str
     price_per_unit: float
