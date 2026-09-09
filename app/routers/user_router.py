@@ -1,6 +1,8 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header, Query
 from sqlalchemy.orm import Session
+from jose import jwt, JWTError
+from app.config import settings
 from app.database import get_db
 from app.models.user_model import User
 from app.models.product_model import Product
@@ -8,6 +10,7 @@ from app.models.demand_model import Demand, Offer
 from app.models.order_model import Order
 from app.schemas.user_schema import UserResponse, UserUpdate
 from app.utils import get_current_user
+from app.routers.notification_router import send_in_app_notification
 
 router = APIRouter(prefix="/users", tags=["User Profile & Dashboard (প্রোফাইল ও ড্যাশবোর্ড)"])
 
@@ -53,6 +56,7 @@ def update_user_verification_status(
     """
     Update verification status of a user (verified, rejected, pending, in_progress, suspended)
     and NID status (verified, rejected, pending) from Admin Dashboard.
+    Generates notifications for the user automatically.
     """
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -61,53 +65,180 @@ def update_user_verification_status(
             detail="ব্যবহারকারী পাওয়া যায়নি।"
         )
     
+    old_v_status = (user.verification_status or "pending").strip().lower()
+    old_admin_note = (user.admin_note or "").strip()
+    old_nid_status = (user.nid_status or "pending").strip().lower()
+    old_nid_note = (user.nid_rejection_note or "").strip()
+
+    status_changed = False
     new_status = status_update.get("verification_status") or status_update.get("status")
     if new_status:
-        user.verification_status = new_status.strip().lower()
+        st = new_status.strip().lower()
+        if st in ["inprogress", "in_progress"]:
+            st = "in_progress"
+        if st != old_v_status:
+            user.verification_status = st
+            status_changed = True
         
+    admin_note_changed = False
     if "admin_note" in status_update:
-        user.admin_note = status_update.get("admin_note") or ""
+        new_note = (status_update.get("admin_note") or "").strip()
+        if new_note != old_admin_note:
+            user.admin_note = new_note
+            admin_note_changed = True
         
+    nid_status_changed = False
     if "nid_status" in status_update:
-        user.nid_status = (status_update.get("nid_status") or "").strip().lower()
+        new_nid_st = (status_update.get("nid_status") or "").strip().lower()
+        if new_nid_st != old_nid_status:
+            user.nid_status = new_nid_st
+            nid_status_changed = True
         
+    nid_note_changed = False
     if "nid_rejection_note" in status_update:
-        user.nid_rejection_note = status_update.get("nid_rejection_note") or ""
+        new_nid_note = (status_update.get("nid_rejection_note") or "").strip()
+        if new_nid_note != old_nid_note:
+            user.nid_rejection_note = new_nid_note
+            nid_note_changed = True
 
     db.add(user)
     db.commit()
     db.refresh(user)
+
+    # 1. Trigger in-app notification on verification status change
+    cur_v_status = (user.verification_status or "pending").strip().lower()
+    if status_changed or (admin_note_changed and cur_v_status in ["rejected", "suspended", "in_progress"]):
+        if cur_v_status == "verified":
+            send_in_app_notification(
+                db=db,
+                user_id=user.id,
+                title="অভিনন্দন! আপনার অ্যাকাউন্ট ভেরিফাইড হয়েছে ✅",
+                message="আপনার অ্যাকাউন্ট সফলভাবে যাচাই করা হয়েছে। এখন আপনি প্ল্যাটফর্মের সব ফিচার ও সরাসরি কেনাবেচা সম্পন্ন করতে পারবেন।",
+                notification_type="verification",
+                related_id=user.id
+            )
+        elif cur_v_status == "rejected":
+            note_txt = f" কারণ: {user.admin_note}" if user.admin_note else " অনুগ্রহ করে সঠিক তথ্য প্রদান করে পুনরায় আবেদন করুন।"
+            send_in_app_notification(
+                db=db,
+                user_id=user.id,
+                title="অ্যাকাউন্ট আবেদন বাতিল করা হয়েছে ❌",
+                message=f"আপনার অ্যাকাউন্ট ভেরিফিকেশন আবেদন বাতিল করা হয়েছে।{note_txt}",
+                notification_type="verification",
+                related_id=user.id
+            )
+        elif cur_v_status == "suspended":
+            note_txt = f" কারণ: {user.admin_note}" if user.admin_note else " বিস্তারিত জানতে সাপোর্ট টিমের সাথে যোগাযোগ করুন।"
+            send_in_app_notification(
+                db=db,
+                user_id=user.id,
+                title="অ্যাকাউন্ট সাময়িক স্থগিত 🚫",
+                message=f"আপনার অ্যাকাউন্ট সাময়িক স্থগিত করা হয়েছে।{note_txt}",
+                notification_type="verification",
+                related_id=user.id
+            )
+        elif cur_v_status == "in_progress":
+            note_txt = f" নোট: {user.admin_note}" if user.admin_note else " পর্যালোচনার পর অতি দ্রুত ফলাফল জানানো হবে।"
+            send_in_app_notification(
+                db=db,
+                user_id=user.id,
+                title="কাগজপত্র যাচাই চলছে 🔄",
+                message=f"আপনার অ্যাকাউন্ট ভেরিফিকেশনের তথ্য ও কাগজপত্র পর্যালোচনা করা হচ্ছে।{note_txt}",
+                notification_type="verification",
+                related_id=user.id
+            )
+
+    # 2. Trigger in-app notification on NID status change
+    cur_nid_status = (user.nid_status or "pending").strip().lower()
+    if nid_status_changed or (nid_note_changed and cur_nid_status == "rejected"):
+        if cur_nid_status == "rejected":
+            note_txt = f" কারণ: {user.nid_rejection_note}।" if user.nid_rejection_note else ""
+            send_in_app_notification(
+                db=db,
+                user_id=user.id,
+                title="জাতীয় পরিচয়পত্র (NID) সংক্রান্ত সতর্কতা ⚠️",
+                message=f"আপনার NID কার্ড যাচাই বাতিল করা হয়েছে।{note_txt} অনুগ্রহ করে প্রোফাইল থেকে স্পষ্ট ছবি পুনরায় আপলোড করুন।",
+                notification_type="nid",
+                related_id=user.id
+            )
+        elif cur_nid_status == "verified":
+            send_in_app_notification(
+                db=db,
+                user_id=user.id,
+                title="জাতীয় পরিচয়পত্র (NID) সফলভাবে যাচাইকৃত ✅",
+                message="আপনার জাতীয় পরিচয়পত্রের নথি সফলভাবে যাচাই ও অনুমোদিত হয়েছে।",
+                notification_type="nid",
+                related_id=user.id
+            )
+
     return user
 
 
 @router.post("/reupload-nid", response_model=UserResponse)
 def reupload_nid_documents(
     payload: dict,
-    current_user: User = Depends(get_current_user),
+    user_id: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """
     Allow user to re-upload their NID front and back images when rejected by admin.
+    Supports Bearer token in header or user_id query/payload.
     """
+    user = None
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ")[1].strip()
+        try:
+            p = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            uid = p.get("sub")
+            if uid:
+                user = db.query(User).filter(User.id == uid).first()
+        except JWTError:
+            pass
+
+    if not user:
+        req_uid = user_id or payload.get("user_id")
+        if req_uid:
+            user = db.query(User).filter(User.id == str(req_uid).strip()).first()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="ব্যবহারকারী শনাক্ত করা যায়নি। অনুগ্রহ করে লগইন করুন।"
+        )
+
     nid_front = payload.get("nid_front_url")
     nid_back = payload.get("nid_back_url")
     nid_number = payload.get("nid_or_doc")
     
     if nid_front:
-        current_user.nid_front_url = nid_front
+        user.nid_front_url = nid_front
     if nid_back:
-        current_user.nid_back_url = nid_back
+        user.nid_back_url = nid_back
     if nid_number:
-        current_user.nid_or_doc = nid_number
+        user.nid_or_doc = nid_number
         
-    current_user.nid_status = "pending"
-    current_user.nid_rejection_note = ""
-    current_user.verification_status = "in_progress"
+    user.nid_status = "pending"
+    user.nid_rejection_note = ""
+    user.verification_status = "pending"
+    user.admin_note = "ইউজার নতুন এনআইডি জমা দিয়েছেন (যাচাই প্রয়োজন)"
     
-    db.add(current_user)
+    db.add(user)
     db.commit()
-    db.refresh(current_user)
-    return current_user
+    db.refresh(user)
+
+    # Send confirmation notification to the user
+    send_in_app_notification(
+        db=db,
+        user_id=user.id,
+        title="সংশোধিত NID জমা সম্পন্ন হয়েছে 📄",
+        message="আপনার সংশোধিত জাতীয় পরিচয়পত্র সফলভাবে গৃহীত হয়েছে। অ্যাডমিন টিম দ্রুত এটি যাচাই করবে।",
+        notification_type="nid",
+        related_id=user.id
+    )
+
+    return user
+
 
 
 

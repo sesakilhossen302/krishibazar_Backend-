@@ -117,6 +117,9 @@ class TokenResponse(BaseModel):
     email: str
     district: str
     verification_status: str
+    admin_note: Optional[str] = ""
+    nid_status: Optional[str] = "pending"
+    nid_rejection_note: Optional[str] = ""
 
 
 class UserResponse(BaseModel):

@@ -44,7 +44,7 @@ class User(Base):
     trade_license_url = Column(String, nullable=True, default="")
 
     # Verification & Rating Stats
-    verification_status = Column(String, default=VerificationStatus.VERIFIED)
+    verification_status = Column(String, default=VerificationStatus.PENDING)
     admin_note = Column(String, nullable=True, default="")
     nid_status = Column(String, nullable=True, default="pending")  # pending, verified, rejected
     nid_rejection_note = Column(String, nullable=True, default="")
