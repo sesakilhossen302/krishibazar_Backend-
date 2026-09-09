@@ -42,32 +42,13 @@ def resolve_current_user(
 
 
 def serialize_demand(d: Demand, user: Optional[User] = None) -> DemandResponse:
-    photo_url = user.photo_url if user and user.photo_url else ""
-    phone = user.phone if user and user.phone else ""
-    return DemandResponse(
-        id=d.id,
-        buyer_id=d.buyer_id,
-        buyer_name=d.buyer_name,
-        buyer_business_name=d.buyer_business_name,
-        buyer_district=d.buyer_district,
-        buyer_verified=d.buyer_verified,
-        buyer_photo_url=photo_url,
-        buyer_phone=phone,
-        product_title=d.product_title,
-        category=d.category,
-        required_quantity=d.required_quantity,
-        fulfilled_quantity=d.fulfilled_quantity,
-        unit=d.unit,
-        required_location=d.required_location,
-        required_date=d.required_date,
-        min_expected_price=d.min_expected_price,
-        max_expected_price=d.max_expected_price,
-        quality_grade=d.quality_grade,
-        additional_note=d.additional_note or "",
-        status=d.status,
-        offers_count=d.offers_count,
-        created_at=d.created_at,
-    )
+    res = DemandResponse.model_validate(d)
+    if user:
+        if user.photo_url:
+            res.buyer_photo_url = user.photo_url
+        if user.phone:
+            res.buyer_phone = user.phone
+    return res
 
 
 @router.get("/", response_model=List[DemandResponse])
