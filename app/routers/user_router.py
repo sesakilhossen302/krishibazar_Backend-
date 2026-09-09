@@ -19,6 +19,45 @@ def get_user_profile(current_user: User = Depends(get_current_user)):
     return current_user
 
 
+@router.get("/profile/{user_id}", response_model=UserResponse)
+def get_user_by_id(user_id: str, db: Session = Depends(get_db)):
+    """
+    Get public/full profile by user ID.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="ব্যবহারকারী পাওয়া যায়নি।"
+        )
+    return user
+
+
+@router.get("/by-identifier", response_model=UserResponse)
+def get_user_by_identifier(
+    phone: str = "",
+    email: str = "",
+    db: Session = Depends(get_db)
+):
+    """
+    Get user profile by phone or email.
+    """
+    clean_phone = phone.strip()
+    clean_email = email.strip().lower()
+    user = None
+    if clean_phone:
+        user = db.query(User).filter(User.phone == clean_phone).first()
+    if not user and clean_email:
+        user = db.query(User).filter(User.email == clean_email).first()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="ব্যবহারকারী পাওয়া যায়নি।"
+        )
+    return user
+
+
 @router.patch("/profile", response_model=UserResponse)
 def update_user_profile(
     user_update: UserUpdate,
