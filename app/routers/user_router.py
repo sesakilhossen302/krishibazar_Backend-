@@ -79,6 +79,32 @@ def update_user_profile(
     return current_user
 
 
+@router.patch("/profile/{user_id}", response_model=UserResponse)
+def update_user_profile_by_id(
+    user_id: str,
+    user_update: UserUpdate,
+    db: Session = Depends(get_db)
+):
+    """
+    Update profile directly by user_id.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="ব্যবহারকারী পাওয়া যায়নি।"
+        )
+    update_data = user_update.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        if value is not None:
+            setattr(user, field, value)
+
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 @router.get("/dashboard-stats")
 def get_dashboard_stats(
     current_user: User = Depends(get_current_user),
