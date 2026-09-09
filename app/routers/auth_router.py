@@ -22,6 +22,7 @@ from app.schemas.user_schema import (
 )
 from app.utils import hash_password, verify_password, create_access_token, get_current_user
 from app.services.email_service import send_otp_via_gmail
+from app.routers.notification_router import send_in_app_notification
 
 router = APIRouter(prefix="/auth", tags=["Authentication & OTP"])
 
@@ -237,7 +238,10 @@ def signup(user_data: UserSignup, db: Session = Depends(get_db)):
         trade_info=user_data.trade_info or "",
         trade_license_url=user_data.trade_license_url or "",
 
-        verification_status="verified",
+        verification_status="pending",
+        admin_note="",
+        nid_status="pending",
+        nid_rejection_note="",
         completed_orders=0,
         rating=5.0,
         reviews_count=0,
@@ -247,6 +251,16 @@ def signup(user_data: UserSignup, db: Session = Depends(get_db)):
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
+
+    # Dispatch welcome in-app notification
+    send_in_app_notification(
+        db=db,
+        user_id=db_user.id,
+        title="স্বাগতম কৃষিবাজারে! 🌾",
+        message=f"আসসালামু আলাইকুম {db_user.name}, কৃষিবাজারে আপনাকে স্বাগতম! আপনার অ্যাকাউন্ট ভেরিফিকেশন প্রক্রিয়াধীন রয়েছে।",
+        notification_type="system",
+        related_id=db_user.id
+    )
 
     # Generate JWT Token for immediate login
     access_token = create_access_token(data={"sub": db_user.id, "role": db_user.role})
@@ -260,7 +274,10 @@ def signup(user_data: UserSignup, db: Session = Depends(get_db)):
         phone=db_user.phone,
         email=db_user.email or "",
         district=db_user.district or "",
-        verification_status=db_user.verification_status or "verified"
+        verification_status=db_user.verification_status or "pending",
+        admin_note=db_user.admin_note or "",
+        nid_status=db_user.nid_status or "pending",
+        nid_rejection_note=db_user.nid_rejection_note or ""
     )
 
 
@@ -297,7 +314,10 @@ def login(user_data: UserLogin, db: Session = Depends(get_db)):
         phone=user.phone,
         email=user.email or "",
         district=user.district or "",
-        verification_status=user.verification_status or "verified"
+        verification_status=user.verification_status or "pending",
+        admin_note=user.admin_note or "",
+        nid_status=user.nid_status or "pending",
+        nid_rejection_note=user.nid_rejection_note or ""
     )
 
 
@@ -367,7 +387,10 @@ def login_via_otp(req: OtpLoginRequest, db: Session = Depends(get_db)):
         phone=user.phone,
         email=user.email or "",
         district=user.district or "",
-        verification_status=user.verification_status or "verified"
+        verification_status=user.verification_status or "pending",
+        admin_note=user.admin_note or "",
+        nid_status=user.nid_status or "pending",
+        nid_rejection_note=user.nid_rejection_note or ""
     )
 
 

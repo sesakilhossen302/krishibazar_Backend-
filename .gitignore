@@ -9,3 +9,6 @@ krishibazar.db
 .DS_Store
 uploads/*
 !uploads/.gitkeep
+test_*.py
+check_*.py
+reset_*.py
