@@ -408,14 +408,17 @@ def accept_offer(
     db.refresh(new_order)
 
     # Send notifications to farmer
-    send_in_app_notification(
-        db=db,
-        user_id=offer.farmer_id,
-        title="🎉 অভিনন্দন! আপনার অফার গৃহীত হয়েছে!",
-        message=f"{current_user.name} আপনার {offer.offered_quantity} {offer.unit} {demand.product_title} এর অফার গ্রহণ করেছেন। অর্ডার নং: {order_num}",
-        notification_type="order",
-        related_id=new_order.id
-    )
+    try:
+        send_in_app_notification(
+            db=db,
+            user_id=offer.farmer_id,
+            title="🎉 অভিনন্দন! আপনার অফার গৃহীত হয়েছে!",
+            message=f"{b_name} আপনার {offer.offered_quantity} {offer.unit} {demand.product_title} এর অফার গ্রহণ করেছেন। অর্ডার নং: {order_num}",
+            notification_type="order",
+            related_id=new_order.id
+        )
+    except Exception as e:
+        print(f"Error sending order notification: {e}")
 
     return new_order
 
