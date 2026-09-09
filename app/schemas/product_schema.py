@@ -1,7 +1,8 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
 class ProductCreate(BaseModel):
+    farmer_id: Optional[str] = None
     title: str
     category: str
     quantity: float
@@ -14,6 +15,7 @@ class ProductCreate(BaseModel):
     quality_grade: str
     description: Optional[str] = ""
     image_url: Optional[str] = ""
+    images: Optional[List[str]] = []
     video_url: Optional[str] = ""
     video_note: Optional[str] = ""
 
@@ -31,6 +33,7 @@ class ProductUpdate(BaseModel):
     quality_grade: Optional[str] = None
     description: Optional[str] = None
     image_url: Optional[str] = None
+    images: Optional[List[str]] = None
     video_url: Optional[str] = None
     video_note: Optional[str] = None
     status: Optional[str] = None
@@ -54,6 +57,7 @@ class ProductResponse(BaseModel):
     quality_grade: str
     description: Optional[str] = ""
     image_url: Optional[str] = ""
+    images: Optional[List[str]] = []
     video_url: Optional[str] = ""
     video_note: Optional[str] = ""
     status: str
@@ -61,3 +65,4 @@ class ProductResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
