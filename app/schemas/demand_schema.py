@@ -56,6 +56,11 @@ class DemandResponse(BaseModel):
 
 class OfferCreate(BaseModel):
     demand_id: str
+    farmer_id: Optional[str] = None
+    farmer_name: Optional[str] = None
+    farmer_phone: Optional[str] = None
+    farmer_location: Optional[str] = None
+    farmer_verified: Optional[bool] = None
     offered_quantity: float
     unit: str = "কেজি (kg)"
     price_per_unit: float

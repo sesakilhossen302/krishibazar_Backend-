@@ -237,39 +237,57 @@ def get_offers_for_demand(demand_id: str, db: Session = Depends(get_db)):
 
 @router.get("/offers/my-offers", response_model=List[OfferResponse])
 def get_my_submitted_offers(
-    current_user: User = Depends(get_current_user),
+    authorization: Optional[str] = Header(None),
+    farmer_id: Optional[str] = Query(None),
+    user_id: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
     """
     Farmer views all offers they have submitted.
+    Supports Bearer token, farmer_id or user_id query parameters.
     """
+    user = resolve_current_user(authorization, farmer_id or user_id, db)
+    target_id = user.id if user else (farmer_id or user_id)
+    if not target_id or not str(target_id).strip():
+        return []
     return db.query(Offer).filter(
-        Offer.farmer_id == current_user.id
+        Offer.farmer_id == str(target_id).strip()
     ).order_by(Offer.created_at.desc()).all()
 
 
 @router.post("/offers", response_model=OfferResponse, status_code=status.HTTP_201_CREATED)
 def create_offer(
     offer_in: OfferCreate,
-    current_user: User = Depends(get_current_user),
+    authorization: Optional[str] = Header(None),
+    farmer_id: Optional[str] = Query(None),
+    user_id: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
     """
     Farmer submits a price & quantity offer for a buyer's demand.
+    Accepts Bearer auth, query parameters, or farmer fields inside body.
     """
     demand = db.query(Demand).filter(Demand.id == offer_in.demand_id).first()
     if not demand:
         raise HTTPException(status_code=404, detail="চাহিদাপত্রটি পাওয়া যায়নি।")
 
+    user = resolve_current_user(authorization, offer_in.farmer_id or farmer_id or user_id, db)
+
+    f_id = user.id if user else (offer_in.farmer_id or farmer_id or user_id or f"far_{uuid.uuid4().hex[:8]}")
+    f_name = (user.name if user and user.name else None) or offer_in.farmer_name or "কৃষক"
+    f_phone = (user.phone if user and user.phone else None) or offer_in.farmer_phone or ""
+    f_loc = (user.district if user and user.district else None) or offer_in.farmer_location or "বাংলাদেশ"
+    f_verified = (user.verification_status == "verified") if user else (offer_in.farmer_verified if offer_in.farmer_verified is not None else True)
+
     new_id = f"off_{uuid.uuid4().hex[:8]}"
     db_offer = Offer(
         id=new_id,
         demand_id=offer_in.demand_id,
-        farmer_id=current_user.id,
-        farmer_name=current_user.name,
-        farmer_phone=current_user.phone,
-        farmer_location=current_user.district,
-        farmer_verified=(current_user.verification_status == "verified"),
+        farmer_id=f_id,
+        farmer_name=f_name,
+        farmer_phone=f_phone,
+        farmer_location=f_loc,
+        farmer_verified=f_verified,
         offered_quantity=offer_in.offered_quantity,
         unit=offer_in.unit,
         price_per_unit=offer_in.price_per_unit,
@@ -280,19 +298,22 @@ def create_offer(
         created_at=datetime.now().strftime("%Y-%m-%d %H:%M")
     )
     db.add(db_offer)
-    demand.offers_count += 1
+    demand.offers_count = (demand.offers_count or 0) + 1
     db.commit()
     db.refresh(db_offer)
 
-    # Notify the buyer
-    send_in_app_notification(
-        db=db,
-        user_id=demand.buyer_id,
-        title="নতুন দরপত্র (Offer) এসেছে!",
-        message=f"{current_user.name} আপনার '{demand.product_title}' চাহিদায় ৳{offer_in.price_per_unit}/{offer_in.unit} দরে অফার পাঠিয়েছেন।",
-        notification_type="offer",
-        related_id=db_offer.id
-    )
+    # Notify the buyer in-app
+    try:
+        send_in_app_notification(
+            db=db,
+            user_id=demand.buyer_id,
+            title="নতুন দরপত্র (Offer) এসেছে! 🌾",
+            message=f"{f_name} আপনার '{demand.product_title}' চাহিদায় ৳{offer_in.price_per_unit}/{offer_in.unit} দরে অফার পাঠিয়েছেন।",
+            notification_type="offer",
+            related_id=db_offer.id
+        )
+    except Exception as e:
+        print(f"Error sending offer notification: {e}")
 
     return db_offer
 
