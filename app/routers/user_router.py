@@ -1,3 +1,4 @@
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
@@ -9,6 +10,65 @@ from app.schemas.user_schema import UserResponse, UserUpdate
 from app.utils import get_current_user
 
 router = APIRouter(prefix="/users", tags=["User Profile & Dashboard (প্রোফাইল ও ড্যাশবোর্ড)"])
+
+
+@router.get("/", response_model=List[UserResponse])
+def get_all_users(
+    role: Optional[str] = None,
+    verification_status: Optional[str] = None,
+    search: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Get all registered users with all their details (NID, documents, location, photo, etc.)
+    for Admin Dashboard.
+    """
+    query = db.query(User)
+
+    if role and role.strip():
+        query = query.filter(User.role == role.strip().lower())
+
+    if verification_status and verification_status.strip():
+        query = query.filter(User.verification_status == verification_status.strip().lower())
+
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.filter(
+            (User.name.ilike(term)) |
+            (User.phone.ilike(term)) |
+            (User.email.ilike(term)) |
+            (User.district.ilike(term)) |
+            (User.business_name.ilike(term))
+        )
+
+    return query.order_by(User.id.desc()).all()
+
+
+@router.patch("/{user_id}/status", response_model=UserResponse)
+def update_user_verification_status(
+    user_id: str,
+    status_update: dict,
+    db: Session = Depends(get_db)
+):
+    """
+    Update verification status of a user (verified, rejected, pending) from Admin Dashboard.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="ব্যবহারকারী পাওয়া যায়নি।"
+        )
+    
+    new_status = status_update.get("verification_status") or status_update.get("status")
+    if new_status:
+        user.verification_status = new_status.strip().lower()
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    return user
+
 
 
 @router.get("/profile", response_model=UserResponse)
