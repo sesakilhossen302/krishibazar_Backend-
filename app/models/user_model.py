@@ -46,7 +46,7 @@ class User(Base):
     # Verification & Rating Stats
     verification_status = Column(String, default=VerificationStatus.VERIFIED)
     completed_orders = Column(Integer, default=0)
-    rating = Column(Float, default=4.8)
+    rating = Column(Float, default=0.0)
     reviews_count = Column(Integer, default=0)
     payment_reliability = Column(Integer, default=98)
     is_active = Column(Boolean, default=True)

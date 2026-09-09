@@ -50,8 +50,8 @@ class UserSignup(BaseModel):
     otp_code: Optional[str] = Field(default="", examples=["123456"], description="Optional OTP code if pre-verified")
     
     # Address & NID Docs
-    district: str = Field(default="রাজশাহী", examples=["রাজশাহী"])
-    address: str = Field(default="গোদাগাড়ী, রাজশাহী", examples=["গোদাগাড়ী, রাজশাহী"])
+    district: Optional[str] = Field(default="", examples=["ঢাকা"])
+    address: Optional[str] = Field(default="", examples=["মহাখালী, ঢাকা"])
     nid_or_doc: Optional[str] = Field(default="", examples=["NID-7829102938"])
     nid_front_url: Optional[str] = Field(default="", examples=["https://example.com/nid_front.jpg"])
     nid_back_url: Optional[str] = Field(default="", examples=["https://example.com/nid_back.jpg"])
