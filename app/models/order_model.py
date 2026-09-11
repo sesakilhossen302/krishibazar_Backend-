@@ -39,6 +39,14 @@ class Order(Base):
     vehicle_number = Column(String, default="ঢাকা মেট্রো-ট ১১-৪৫২৩")
     transport_status = Column(String, default="waiting")
     
+    # Quality Verification Info
+    actual_weight = Column(Float, nullable=True)
+    quality_grade = Column(String, nullable=True)
+    verified_by = Column(String, nullable=True)
+    verification_notes = Column(Text, nullable=True)
+    is_quality_verified = Column(Boolean, default=False)
+
     has_dispute = Column(Boolean, default=False)
     is_rated = Column(Boolean, default=False)
     created_at = Column(String, nullable=False)
+

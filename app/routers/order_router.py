@@ -14,6 +14,7 @@ from app.schemas.order_schema import (
     OrderResponse,
     OrderStatusUpdate,
     TransportUpdate,
+    QualityVerificationUpdate,
     OrderDisputeCreate
 )
 from app.utils import get_current_user
@@ -181,15 +182,63 @@ def pay_deposit(
     return order
 
 
+@router.patch("/{order_id}/verify-quality", response_model=OrderResponse)
+def verify_order_quality(
+    order_id: str,
+    verification_in: QualityVerificationUpdate,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Quality and weight inspection at collection hub (performed via Admin Dashboard).
+    Marks the order as collectionVerified and updates verification data.
+    """
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="অর্ডারটি পাওয়া যায়নি।")
+
+    order.actual_weight = verification_in.actual_weight
+    order.quality_grade = verification_in.quality_grade
+    if verification_in.verified_by:
+        order.verified_by = verification_in.verified_by
+    if verification_in.verification_notes:
+        order.verification_notes = verification_in.verification_notes
+    order.is_quality_verified = True
+    order.order_status = "collectionVerified"
+
+    db.commit()
+    db.refresh(order)
+
+    # Notify buyer & farmer
+    send_in_app_notification(
+        db=db,
+        user_id=order.buyer_id,
+        title="✅ পণ্যের মান ও ওজন যাচাই সম্পন্ন!",
+        message=f"অর্ডার নং {order.order_number} এর গুণমান যাচাই সম্পন্ন হয়েছে (গ্রেড: {order.quality_grade}, প্রকৃত ওজন: {order.actual_weight} {order.unit})। পণ্য এখন পরিবহনের জন্য প্রস্তুত।",
+        notification_type="order",
+        related_id=order.id
+    )
+    send_in_app_notification(
+        db=db,
+        user_id=order.farmer_id,
+        title="✅ পণ্যের হাব যাচাই সম্পন্ন!",
+        message=f"অর্ডার নং {order.order_number} কালেকশন হাবে ইন্সপেকশন সম্পন্ন হয়েছে।",
+        notification_type="order",
+        related_id=order.id
+    )
+
+    return order
+
+
 @router.patch("/{order_id}/status", response_model=OrderResponse)
 def update_order_status(
     order_id: str,
     status_update: OrderStatusUpdate,
-    current_user: User = Depends(get_current_user),
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """
-    Update order lifecycle status (e.g. processing, pickupReady, inTransit, delivered, completed, cancelled).
+    Update order lifecycle status (e.g. pending, paymentConfirmed, collectionVerified, inTransit, delivered, completed, cancelled).
     """
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
@@ -209,8 +258,18 @@ def update_order_status(
     db.commit()
     db.refresh(order)
 
+    # Resolve sender/current user if token provided
+    current_uid = None
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ")[1].strip()
+        try:
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            current_uid = payload.get("sub")
+        except JWTError:
+            pass
+
     # Notify counter-party
-    target_user_id = order.buyer_id if current_user.id == order.farmer_id else order.farmer_id
+    target_user_id = order.buyer_id if current_uid == order.farmer_id else order.farmer_id
     send_in_app_notification(
         db=db,
         user_id=target_user_id,
@@ -227,11 +286,11 @@ def update_order_status(
 def update_transport_details(
     order_id: str,
     transport_in: TransportUpdate,
-    current_user: User = Depends(get_current_user),
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """
-    Update transport & vehicle tracking information for the order.
+    Update transport & vehicle tracking information for the order (driver, vehicle, status).
     """
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
@@ -242,9 +301,27 @@ def update_transport_details(
         if value is not None:
             setattr(order, field, value)
 
+    # Automatically synchronize order_status with transport progression if applicable
+    if transport_in.transport_status in ["in_transit", "onTheWay"]:
+        order.order_status = "inTransit"
+    elif transport_in.transport_status in ["delivered", "reached"]:
+        order.order_status = "delivered"
+
     db.commit()
     db.refresh(order)
+
+    # Notify buyer & farmer
+    send_in_app_notification(
+        db=db,
+        user_id=order.buyer_id,
+        title=f"🚚 পরিবহন আপডেট: {order.transport_status}",
+        message=f"অর্ডার নং {order.order_number} পরিবহন আপডেট: {order.transport_status} (ড্রাইভার: {order.driver_name}, গাড়ি: {order.vehicle_number})",
+        notification_type="order",
+        related_id=order.id
+    )
+
     return order
+
 
 
 @router.post("/{order_id}/dispute", response_model=OrderResponse)
