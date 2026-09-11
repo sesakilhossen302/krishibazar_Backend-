@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime
 import uuid
+from jose import jwt, JWTError
 
+from app.config import settings
 from app.database import get_db
 from app.models.order_model import Order
 from app.models.user_model import User
@@ -24,17 +26,22 @@ router = APIRouter(prefix="/orders", tags=["Orders & Transport (অর্ডা�
 def get_orders(
     buyer_id: Optional[str] = None,
     farmer_id: Optional[str] = None,
+    user_id: Optional[str] = None,
     status: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """
-    List orders with optional filtering.
+    List orders with optional filtering by buyer_id, farmer_id, user_id (matches either), or status.
     """
     query = db.query(Order)
+    if user_id:
+        uid = str(user_id).strip()
+        query = query.filter((Order.buyer_id == uid) | (Order.farmer_id == uid))
     if buyer_id:
-        query = query.filter(Order.buyer_id == buyer_id)
+        query = query.filter(Order.buyer_id == str(buyer_id).strip())
     if farmer_id:
-        query = query.filter(Order.farmer_id == farmer_id)
+        query = query.filter(Order.farmer_id == str(farmer_id).strip())
     if status:
         query = query.filter(Order.order_status == status)
     return query.order_by(Order.created_at.desc()).all()
@@ -42,15 +49,33 @@ def get_orders(
 
 @router.get("/my-orders", response_model=List[OrderResponse])
 def get_my_orders(
-    current_user: User = Depends(get_current_user),
+    authorization: Optional[str] = Header(None),
+    user_id: Optional[str] = Query(None),
+    farmer_id: Optional[str] = Query(None),
+    buyer_id: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
     """
-    Get all orders associated with the logged-in user (as Buyer or as Farmer).
+    Get all orders associated with the user (as Buyer or as Farmer).
+    Accepts Bearer token, user_id, farmer_id, or buyer_id.
     """
-    return db.query(Order).filter(
-        (Order.buyer_id == current_user.id) | (Order.farmer_id == current_user.id)
-    ).order_by(Order.created_at.desc()).all()
+    uid = user_id or farmer_id or buyer_id
+    if not uid and authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ")[1].strip()
+        try:
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            uid = payload.get("sub")
+        except JWTError:
+            pass
+
+    query = db.query(Order)
+    if uid:
+        target_uid = str(uid).strip()
+        query = query.filter((Order.buyer_id == target_uid) | (Order.farmer_id == target_uid))
+    if status:
+        query = query.filter(Order.order_status == status)
+    return query.order_by(Order.created_at.desc()).all()
 
 
 @router.get("/{order_id}", response_model=OrderResponse)
