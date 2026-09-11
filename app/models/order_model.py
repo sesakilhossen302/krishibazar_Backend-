@@ -31,7 +31,12 @@ class Order(Base):
     delivery_location = Column(String, nullable=False)
     expected_delivery_date = Column(String, nullable=False)
     
+    # Payment verification
+    payment_status = Column(String, default="unpaid")  # unpaid, pending_verification, confirmed, refund_pending, refunded
+    payment_verification_notes = Column(String, default="")
+
     # Transport Info
+    transport_agency = Column(String, default="")
     pickup_location = Column(String, default="")
     collection_center = Column(String, default="")
     driver_name = Column(String, default="মোঃ রফিকুল ইসলাম")
@@ -40,11 +45,20 @@ class Order(Base):
     transport_status = Column(String, default="waiting")
     
     # Quality Verification Info
+    inspector_name = Column(String, default="")
+    inspector_designation = Column(String, default="")
     actual_weight = Column(Float, nullable=True)
     quality_grade = Column(String, nullable=True)
     verified_by = Column(String, nullable=True)
     verification_notes = Column(Text, nullable=True)
     is_quality_verified = Column(Boolean, default=False)
+    is_quality_passed = Column(Boolean, nullable=True)
+    rejection_reason = Column(Text, default="")
+
+    # Refund Info
+    refund_status = Column(String, default="none")  # none, pending, completed
+    refund_amount = Column(Float, default=0.0)
+    refund_notes = Column(Text, default="")
 
     has_dispute = Column(Boolean, default=False)
     is_rated = Column(Boolean, default=False)

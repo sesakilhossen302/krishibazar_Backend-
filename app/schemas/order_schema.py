@@ -16,6 +16,7 @@ class OrderStatusUpdate(BaseModel):
     note: Optional[str] = ""
 
 class TransportUpdate(BaseModel):
+    transport_agency: Optional[str] = None
     driver_name: Optional[str] = None
     driver_phone: Optional[str] = None
     vehicle_number: Optional[str] = None
@@ -23,11 +24,26 @@ class TransportUpdate(BaseModel):
     pickup_location: Optional[str] = None
     collection_center: Optional[str] = None
 
+class PaymentConfirmRequest(BaseModel):
+    inspector_name: Optional[str] = "সেলিম রেজা"
+    inspector_designation: Optional[str] = "সিনিয়র কোয়ালিটি অফিসার"
+    notes: Optional[str] = "টাকা পাওয়া গেছে - কনফার্মড"
+
 class QualityVerificationUpdate(BaseModel):
     actual_weight: float
     quality_grade: str = "গ্রেড A (প্রিমিয়াম মান)"
     verified_by: Optional[str] = "সেলিম রেজা (ইনস্পেক্টর)"
+    inspector_name: Optional[str] = None
+    inspector_designation: Optional[str] = None
     verification_notes: Optional[str] = "পণ্য ফ্রেশ ও মানসম্মত"
+
+class QualityRejectRequest(BaseModel):
+    rejection_reason: str = "কালেকশন হাবে পরীক্ষার পর পণ্যের মান সন্তোষজনক পাওয়া যায়নি"
+    inspector_name: Optional[str] = "সেলিম রেজা"
+    inspector_designation: Optional[str] = "সিনিয়র কোয়ালিটি অফিসার"
+
+class RefundProcessRequest(BaseModel):
+    refund_notes: Optional[str] = "পণ্য বাতিল হওয়ায় ক্রেতাকে ২০% ডিপোজিট রিফান্ড দেওয়া হয়েছে"
 
 class OrderDisputeCreate(BaseModel):
     reason: str
@@ -54,20 +70,30 @@ class OrderResponse(BaseModel):
     total_amount: float
     deposit_required: float
     is_deposit_paid: bool
+    payment_status: str = "unpaid"
+    payment_verification_notes: Optional[str] = ""
     order_status: str
     delivery_location: str
     expected_delivery_date: str
     pickup_location: str
     collection_center: str
+    transport_agency: Optional[str] = ""
     driver_name: str
     driver_phone: str
     vehicle_number: str
     transport_status: str
+    inspector_name: Optional[str] = ""
+    inspector_designation: Optional[str] = ""
     actual_weight: Optional[float] = None
     quality_grade: Optional[str] = None
     verified_by: Optional[str] = None
     verification_notes: Optional[str] = None
     is_quality_verified: bool = False
+    is_quality_passed: Optional[bool] = None
+    rejection_reason: Optional[str] = ""
+    refund_status: str = "none"
+    refund_amount: float = 0.0
+    refund_notes: Optional[str] = ""
     has_dispute: bool
     is_rated: bool
     created_at: str

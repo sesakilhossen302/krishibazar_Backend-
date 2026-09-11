@@ -15,6 +15,9 @@ from app.schemas.order_schema import (
     OrderStatusUpdate,
     TransportUpdate,
     QualityVerificationUpdate,
+    PaymentConfirmRequest,
+    QualityRejectRequest,
+    RefundProcessRequest,
     OrderDisputeCreate
 )
 from app.utils import get_current_user
@@ -158,14 +161,15 @@ def pay_deposit(
     db: Session = Depends(get_db)
 ):
     """
-    Pay 20% security deposit to KrishiBazar Escrow.
+    Buyer submits 20% security deposit. Status becomes pending_verification for admin inspection.
     """
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="অর্ডারটি পাওয়া যায়নি।")
 
     order.is_deposit_paid = True
-    order.order_status = "paymentConfirmed"
+    order.payment_status = "pending_verification"
+    order.order_status = "paymentPending"
     db.commit()
     db.refresh(order)
 
@@ -173,8 +177,66 @@ def pay_deposit(
     send_in_app_notification(
         db=db,
         user_id=order.farmer_id,
-        title="💰 অর্ডারের ডিপোজিট পরিশোধিত!",
-        message=f"অর্ডার নং {order.order_number} এর ২০% জামানত (৳{order.deposit_required:,.2f}) কৃষিবাজার এসক্রোতে জমা হয়েছে। পণ্য প্রস্তুত করুন।",
+        title="💰 ক্রেতা ডিপোজিট জমা দিয়েছেন!",
+        message=f"অর্ডার নং {order.order_number} এর ২০% জামানত (৳{order.deposit_required:,.2f}) জমা হয়েছে। এডমিন পেমেন্ট ভেরিফাই করছেন।",
+        notification_type="order",
+        related_id=order.id
+    )
+    send_in_app_notification(
+        db=db,
+        user_id=order.buyer_id,
+        title="⏳ পেমেন্ট ভেরিফিকেশন পেন্ডিং",
+        message=f"আপনার ২০% জামানত (৳{order.deposit_required:,.2f}) গ্রহণের অনুরোধ জমা হয়েছে। এডমিন টাকা প্রাপ্তি নিশ্চিত করছেন।",
+        notification_type="order",
+        related_id=order.id
+    )
+
+    return order
+
+
+@router.post("/{order_id}/confirm-payment", response_model=OrderResponse)
+def confirm_order_payment(
+    order_id: str,
+    payment_confirm_in: PaymentConfirmRequest,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Admin confirms receipt of 20% deposit from buyer and assigns inspection agent.
+    """
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="অর্ডারটি পাওয়া যায়নি।")
+
+    order.is_deposit_paid = True
+    order.payment_status = "confirmed"
+    order.order_status = "paymentConfirmed"
+    if payment_confirm_in.inspector_name:
+        order.inspector_name = payment_confirm_in.inspector_name
+        order.verified_by = payment_confirm_in.inspector_name
+    if payment_confirm_in.inspector_designation:
+        order.inspector_designation = payment_confirm_in.inspector_designation
+    if payment_confirm_in.notes:
+        order.payment_verification_notes = payment_confirm_in.notes
+
+    db.commit()
+    db.refresh(order)
+
+    # Notify buyer & farmer
+    inspector_label = f"{order.inspector_name} ({order.inspector_designation})" if order.inspector_name else "ইন্সপেকশন টিম"
+    send_in_app_notification(
+        db=db,
+        user_id=order.buyer_id,
+        title="💰 টাকা পাওয়া গেছে - কনফার্মড!",
+        message=f"অর্ডার নং {order.order_number} এর ২০% জামানতের টাকা কৃষিবাজার অ্যাকাউন্টে জমা হয়েছে। কালেকশন হাবে পণ্য পরীক্ষার জন্য {inspector_label} নিযুক্ত করা হয়েছে।",
+        notification_type="order",
+        related_id=order.id
+    )
+    send_in_app_notification(
+        db=db,
+        user_id=order.farmer_id,
+        title="💰 ক্রেতার ডিপোজিট কনফার্মড!",
+        message=f"অর্ডার নং {order.order_number} এর ২০% জামানতের টাকা নিশ্চিত হয়েছে। কালেকশন হাবে পণ্য যাচাইয়ের জন্য পাঠানো শুরু করুন।",
         notification_type="order",
         related_id=order.id
     )
@@ -191,7 +253,7 @@ def verify_order_quality(
 ):
     """
     Quality and weight inspection at collection hub (performed via Admin Dashboard).
-    Marks the order as collectionVerified and updates verification data.
+    Marks product as passed and updates verification data.
     """
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
@@ -201,9 +263,14 @@ def verify_order_quality(
     order.quality_grade = verification_in.quality_grade
     if verification_in.verified_by:
         order.verified_by = verification_in.verified_by
+    if verification_in.inspector_name:
+        order.inspector_name = verification_in.inspector_name
+    if verification_in.inspector_designation:
+        order.inspector_designation = verification_in.inspector_designation
     if verification_in.verification_notes:
         order.verification_notes = verification_in.verification_notes
     order.is_quality_verified = True
+    order.is_quality_passed = True
     order.order_status = "collectionVerified"
 
     db.commit()
@@ -222,12 +289,100 @@ def verify_order_quality(
         db=db,
         user_id=order.farmer_id,
         title="✅ পণ্যের হাব যাচাই সম্পন্ন!",
-        message=f"অর্ডার নং {order.order_number} কালেকশন হাবে ইন্সপেকশন সম্পন্ন হয়েছে।",
+        message=f"অর্ডার নং {order.order_number} কালেকশন হাবে ইন্সপেকশন সফল হয়েছে।",
         notification_type="order",
         related_id=order.id
     )
 
     return order
+
+
+@router.post("/{order_id}/reject-quality", response_model=OrderResponse)
+def reject_order_quality(
+    order_id: str,
+    reject_in: QualityRejectRequest,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Admin rejects order quality at collection hub. Prompts buyer to look for alternatives and queues 20% deposit refund.
+    """
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="অর্ডারটি পাওয়া যায়নি।")
+
+    order.is_quality_verified = True
+    order.is_quality_passed = False
+    order.rejection_reason = reject_in.rejection_reason
+    if reject_in.inspector_name:
+        order.inspector_name = reject_in.inspector_name
+        order.verified_by = reject_in.inspector_name
+    if reject_in.inspector_designation:
+        order.inspector_designation = reject_in.inspector_designation
+
+    order.order_status = "qualityRejected"
+    order.payment_status = "refund_pending"
+    order.refund_status = "pending"
+    order.refund_amount = order.deposit_required
+
+    db.commit()
+    db.refresh(order)
+
+    # Notify buyer & farmer
+    send_in_app_notification(
+        db=db,
+        user_id=order.buyer_id,
+        title="⚠️ পণ্যের মান সন্তোষজনক পাওয়া যায়নি",
+        message=f"অর্ডার নং {order.order_number} হাবে পরীক্ষার পর মানসম্মত না হওয়ায় বাতিল করা হয়েছে। আপনার ২০% জামানতের টাকা রিফান্ড পেন্ডিং রয়েছে। অনুগ্রহ করে অন্য পণ্য অনুসন্ধান করুন।",
+        notification_type="order",
+        related_id=order.id
+    )
+    send_in_app_notification(
+        db=db,
+        user_id=order.farmer_id,
+        title="⚠️ সরবরাহকৃত পণ্যের মান কালেকশন হাবে উত্তীর্ণ হয়নি",
+        message=f"অর্ডার নং {order.order_number} এর পণ্য কোয়ালিটি টেস্টে উত্তীর্ণ হয়নি। কারণ: {order.rejection_reason}। ভবিষ্যতে উন্নত পণ্য সরবরাহ করুন।",
+        notification_type="order",
+        related_id=order.id
+    )
+
+    return order
+
+
+@router.post("/{order_id}/process-refund", response_model=OrderResponse)
+def process_order_refund(
+    order_id: str,
+    refund_in: RefundProcessRequest,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Admin completes refunding the 20% deposit back to the buyer.
+    """
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="অর্ডারটি পাওয়া যায়নি।")
+
+    order.payment_status = "refunded"
+    order.refund_status = "completed"
+    order.order_status = "refunded"
+    if refund_in.refund_notes:
+        order.refund_notes = refund_in.refund_notes
+
+    db.commit()
+    db.refresh(order)
+
+    send_in_app_notification(
+        db=db,
+        user_id=order.buyer_id,
+        title="✅ ২০% টাকা সফলভাবে ফেরত দেওয়া হয়েছে",
+        message=f"অর্ডার নং {order.order_number} এর ২০% জামানতের টাকা (৳{order.deposit_required:,.2f}) আপনার অ্যাকাউন্টে রিফান্ড সম্পন্ন হয়েছে। কারণ: পণ্যের মান সন্তোষজনক ছিল না।",
+        notification_type="order",
+        related_id=order.id
+    )
+
+    return order
+
 
 
 @router.patch("/{order_id}/status", response_model=OrderResponse)
