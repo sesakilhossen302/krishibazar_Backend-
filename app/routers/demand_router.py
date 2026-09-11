@@ -368,7 +368,11 @@ def accept_offer(
     new_order_id = f"ord_{uuid.uuid4().hex[:8]}"
     order_num = f"KB-{uuid.uuid4().hex[:6].upper()}"
     total = offer.offered_quantity * offer.price_per_unit
-    deposit = total * 0.20
+    deposit = round(total * 0.20, 2)
+    buyer_fee = round(total * 0.05, 2)
+    buyer_total = round(total + buyer_fee, 2)
+    farmer_fee = round(total * 0.05, 2)
+    farmer_payout = round(total - farmer_fee, 2)
 
     b_id = user.id if user else demand.buyer_id
     b_name = (user.name if user and user.name else None) or demand.buyer_name or "পাইকারি ক্রেতা"
@@ -394,6 +398,12 @@ def accept_offer(
         unit=offer.unit,
         price_per_unit=offer.price_per_unit,
         total_amount=total,
+        product_amount=total,
+        buyer_service_fee=buyer_fee,
+        buyer_total_amount=buyer_total,
+        farmer_service_fee=farmer_fee,
+        farmer_payout_amount=farmer_payout,
+        farmer_payout_status="unpaid",
         deposit_required=deposit,
         is_deposit_paid=False,
         order_status="pending",

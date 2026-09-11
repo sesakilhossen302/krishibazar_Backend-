@@ -24,8 +24,17 @@ class Order(Base):
     quantity = Column(Float, nullable=False)
     unit = Column(String, nullable=False, default="কেজি (kg)")
     price_per_unit = Column(Float, nullable=False)
-    total_amount = Column(Float, nullable=False)
-    deposit_required = Column(Float, nullable=False)
+    total_amount = Column(Float, nullable=False)  # Base product amount (quantity * price_per_unit)
+    product_amount = Column(Float, nullable=True)  # Base product amount
+    buyer_service_fee = Column(Float, default=0.0)  # 5% extra fee paid by buyer
+    buyer_total_amount = Column(Float, nullable=True)  # total_amount + buyer_service_fee
+    farmer_service_fee = Column(Float, default=0.0)  # 5% fee deducted from farmer
+    farmer_payout_amount = Column(Float, nullable=True)  # total_amount - farmer_service_fee
+    farmer_payout_status = Column(String, default="unpaid")  # unpaid, pending, completed
+    farmer_payout_notes = Column(Text, default="")
+    farmer_payout_date = Column(String, default="")
+
+    deposit_required = Column(Float, nullable=False)  # 20% security deposit
     is_deposit_paid = Column(Boolean, default=False)
     order_status = Column(String, default="pending")
     delivery_location = Column(String, nullable=False)
@@ -39,9 +48,9 @@ class Order(Base):
     transport_agency = Column(String, default="")
     pickup_location = Column(String, default="")
     collection_center = Column(String, default="")
-    driver_name = Column(String, default="মোঃ রফিকুল ইসলাম")
-    driver_phone = Column(String, default="01712-345678")
-    vehicle_number = Column(String, default="ঢাকা মেট্রো-ট ১১-৪৫২৩")
+    driver_name = Column(String, default="")
+    driver_phone = Column(String, default="")
+    vehicle_number = Column(String, default="")
     transport_status = Column(String, default="waiting")
     
     # Quality Verification Info

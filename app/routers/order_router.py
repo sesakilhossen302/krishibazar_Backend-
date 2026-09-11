@@ -18,6 +18,7 @@ from app.schemas.order_schema import (
     PaymentConfirmRequest,
     QualityRejectRequest,
     RefundProcessRequest,
+    FarmerPayoutRequest,
     OrderDisputeCreate
 )
 from app.utils import get_current_user
@@ -109,7 +110,11 @@ def create_order(
     new_id = f"ord_{uuid.uuid4().hex[:8]}"
     order_num = f"KB-{uuid.uuid4().hex[:6].upper()}"
     total = order_in.quantity * order_in.price_per_unit
-    deposit = total * 0.20  # 20% deposit
+    deposit = round(total * 0.20, 2)  # 20% deposit
+    buyer_fee = round(total * 0.05, 2)  # 5% extra platform service fee for buyer
+    buyer_total = round(total + buyer_fee, 2)
+    farmer_fee = round(total * 0.05, 2)  # 5% platform fee deducted from farmer
+    farmer_payout = round(total - farmer_fee, 2)
 
     db_order = Order(
         id=new_id,
@@ -128,6 +133,12 @@ def create_order(
         unit=order_in.unit,
         price_per_unit=order_in.price_per_unit,
         total_amount=total,
+        product_amount=total,
+        buyer_service_fee=buyer_fee,
+        buyer_total_amount=buyer_total,
+        farmer_service_fee=farmer_fee,
+        farmer_payout_amount=farmer_payout,
+        farmer_payout_status="unpaid",
         deposit_required=deposit,
         is_deposit_paid=False,
         order_status="pending",
@@ -410,6 +421,10 @@ def update_order_status(
         if buyer:
             buyer.completed_orders += 1
 
+    if status_update.order_status in ["delivered", "completed"]:
+        if order.farmer_payout_status != "completed":
+            order.farmer_payout_status = "pending"
+
     db.commit()
     db.refresh(order)
 
@@ -461,6 +476,8 @@ def update_transport_details(
         order.order_status = "inTransit"
     elif transport_in.transport_status in ["delivered", "reached"]:
         order.order_status = "delivered"
+        if order.farmer_payout_status != "completed":
+            order.farmer_payout_status = "pending"
 
     db.commit()
     db.refresh(order)
@@ -477,6 +494,57 @@ def update_transport_details(
 
     return order
 
+
+@router.post("/{order_id}/farmer-payout", response_model=OrderResponse)
+def disburse_farmer_payout(
+    order_id: str,
+    payout_in: FarmerPayoutRequest,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Admin confirms payment/payout of net product value to the farmer after delivery cash is collected.
+    """
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="অর্ডারটি পাওয়া যায়নি।")
+
+    # If financial fields are empty on older records, compute them dynamically
+    if not order.farmer_payout_amount:
+        farmer_fee = round(order.total_amount * 0.05, 2)
+        order.farmer_service_fee = farmer_fee
+        order.farmer_payout_amount = round(order.total_amount - farmer_fee, 2)
+    if not order.buyer_service_fee:
+        order.buyer_service_fee = round(order.total_amount * 0.05, 2)
+        order.buyer_total_amount = round(order.total_amount + order.buyer_service_fee, 2)
+
+    order.farmer_payout_status = "completed"
+    notes_text = payout_in.notes or "কৃষকের বিকাশ/ব্যাংক অ্যাকাউন্টে টাকা পরিশোধ করা হয়েছে"
+    if payout_in.transaction_id:
+        notes_text += f" (TrxID: {payout_in.transaction_id})"
+    order.farmer_payout_notes = notes_text
+    order.farmer_payout_date = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # If delivered, we can also mark order status as completed
+    if order.order_status == "delivered":
+        order.order_status = "completed"
+
+    db.commit()
+    db.refresh(order)
+
+    payout_val = order.farmer_payout_amount or (order.total_amount * 0.95)
+
+    # Send high-priority notification to farmer
+    send_in_app_notification(
+        db=db,
+        user_id=order.farmer_id,
+        title="💰 আপনার টাকা অ্যাকাউন্টে পাঠানো হয়েছে!",
+        message=f"অর্ডার নং {order.order_number} এর নিট পাওনা ৳{payout_val:,.2f} টাকা (৫% প্ল্যাটফর্ম ফি কর্তন পরবর্তী) আপনার অ্যাকাউন্টে সফলভাবে পরিশোধ করা হয়েছে। নোট: {notes_text}",
+        notification_type="order",
+        related_id=order.id
+    )
+
+    return order
 
 
 @router.post("/{order_id}/dispute", response_model=OrderResponse)

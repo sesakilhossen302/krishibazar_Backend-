@@ -45,6 +45,10 @@ class QualityRejectRequest(BaseModel):
 class RefundProcessRequest(BaseModel):
     refund_notes: Optional[str] = "পণ্য বাতিল হওয়ায় ক্রেতাকে ২০% ডিপোজিট রিফান্ড দেওয়া হয়েছে"
 
+class FarmerPayoutRequest(BaseModel):
+    notes: Optional[str] = "কৃষকের বিকাশ/ব্যাংক অ্যাকাউন্টে টাকা পরিশোধ করা হয়েছে"
+    transaction_id: Optional[str] = ""
+
 class OrderDisputeCreate(BaseModel):
     reason: str
     description: str
@@ -68,6 +72,14 @@ class OrderResponse(BaseModel):
     unit: str
     price_per_unit: float
     total_amount: float
+    product_amount: Optional[float] = None
+    buyer_service_fee: Optional[float] = 0.0
+    buyer_total_amount: Optional[float] = None
+    farmer_service_fee: Optional[float] = 0.0
+    farmer_payout_amount: Optional[float] = None
+    farmer_payout_status: Optional[str] = "unpaid"
+    farmer_payout_notes: Optional[str] = ""
+    farmer_payout_date: Optional[str] = ""
     deposit_required: float
     is_deposit_paid: bool
     payment_status: str = "unpaid"
