@@ -25,9 +25,14 @@ class TransportUpdate(BaseModel):
     collection_center: Optional[str] = None
 
 class PaymentConfirmRequest(BaseModel):
-    inspector_name: Optional[str] = "সেলিম রেজা"
-    inspector_designation: Optional[str] = "সিনিয়র কোয়ালিটি অফিসার"
+    inspector_name: Optional[str] = ""
+    inspector_designation: Optional[str] = ""
     notes: Optional[str] = "টাকা পাওয়া গেছে - কনফার্মড"
+
+class InspectorAssignRequest(BaseModel):
+    inspector_name: str
+    inspector_designation: Optional[str] = "কোয়ালিটি কন্ট্রোল অফিসার"
+    notes: Optional[str] = ""
 
 class QualityVerificationUpdate(BaseModel):
     actual_weight: float

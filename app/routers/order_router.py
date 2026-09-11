@@ -16,6 +16,7 @@ from app.schemas.order_schema import (
     TransportUpdate,
     QualityVerificationUpdate,
     PaymentConfirmRequest,
+    InspectorAssignRequest,
     QualityRejectRequest,
     RefundProcessRequest,
     FarmerPayoutRequest,
@@ -248,6 +249,47 @@ def confirm_order_payment(
         user_id=order.farmer_id,
         title="💰 ক্রেতার ডিপোজিট কনফার্মড!",
         message=f"অর্ডার নং {order.order_number} এর ২০% জামানতের টাকা নিশ্চিত হয়েছে। কালেকশন হাবে পণ্য যাচাইয়ের জন্য পাঠানো শুরু করুন।",
+        notification_type="order",
+        related_id=order.id
+    )
+
+    return order
+
+
+@router.post("/{order_id}/assign-inspector", response_model=OrderResponse)
+def assign_order_inspector(
+    order_id: str,
+    inspector_in: InspectorAssignRequest,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Admin assigns an inspector agent to examine produce at the collection hub.
+    """
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="অর্ডারটি পাওয়া যায়নি।")
+
+    order.inspector_name = inspector_in.inspector_name
+    order.inspector_designation = inspector_in.inspector_designation or "কোয়ালিটি কন্ট্রোল অফিসার"
+    order.verified_by = inspector_in.inspector_name
+    db.commit()
+    db.refresh(order)
+
+    # Notify buyer & farmer
+    send_in_app_notification(
+        db=db,
+        user_id=order.buyer_id,
+        title="🔍 পণ্য পরীক্ষক নিয়োজিত হয়েছেন",
+        message=f"অর্ডার নং {order.order_number} এর জন্য পণ্য পরীক্ষক হিসেবে {order.inspector_name} ({order.inspector_designation}) নিয়োজিত হয়েছেন। তিনি কালেকশন হাবে পণ্য পরীক্ষা করবেন।",
+        notification_type="order",
+        related_id=order.id
+    )
+    send_in_app_notification(
+        db=db,
+        user_id=order.farmer_id,
+        title="🔍 পণ্য পরীক্ষক নিয়োজিত হয়েছেন",
+        message=f"অর্ডার নং {order.order_number} এর জন্য পরীক্ষক হিসেবে {order.inspector_name} নিয়োজিত হয়েছেন। তিনি পণ্যের মান পরীক্ষা করবেন।",
         notification_type="order",
         related_id=order.id
     )
