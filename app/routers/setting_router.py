@@ -35,7 +35,7 @@ DEFAULT_METHODS = [
         "name": "রকেট",
         "account_number": "01912-345678-9",
         "account_type": "Personal",
-        "is_active": False,
+        "is_active": True,
         "instructions": "রকেট নম্বরে টাকা পাঠিয়ে ট্রানজেকশন আইডি দিন।"
     },
 ]
