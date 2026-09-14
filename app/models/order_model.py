@@ -41,8 +41,13 @@ class Order(Base):
     expected_delivery_date = Column(String, nullable=False)
     
     # Payment verification
-    payment_status = Column(String, default="unpaid")  # unpaid, pending_verification, confirmed, refund_pending, refunded
+    payment_status = Column(String, default="unpaid")  # unpaid, pending_verification, confirmed, refund_pending, refunded, deposit_discrepancy
     payment_verification_notes = Column(String, default="")
+    deposit_payment_method = Column(String, default="")  # bkash, nagad, rocket
+    deposit_sender_phone = Column(String, default="")
+    deposit_transaction_id = Column(String, default="")
+    deposit_proof_url = Column(String, default="")  # image screenshot url
+    deposit_admin_feedback = Column(Text, default="")  # comments if deposit not found or wrong TrxID
 
     # Transport Info
     transport_agency = Column(String, default="")

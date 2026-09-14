@@ -4,3 +4,4 @@ from .notification_model import Notification
 from .product_model import Product
 from .demand_model import Demand, Offer
 from .order_model import Order
+from .setting_model import PaymentSetting

@@ -13,7 +13,8 @@ from app.routers import (
     demand_router,
     order_router,
     upload_router,
-    notification_router
+    notification_router,
+    setting_router
 )
 
 # Create database tables automatically on startup
@@ -52,6 +53,7 @@ app.include_router(demand_router, prefix=settings.API_V1_STR)
 app.include_router(order_router, prefix=settings.API_V1_STR)
 app.include_router(upload_router, prefix=settings.API_V1_STR)
 app.include_router(notification_router, prefix=settings.API_V1_STR)
+app.include_router(setting_router, prefix=settings.API_V1_STR)
 
 @app.get("/", tags=["Health Check"])
 def root():

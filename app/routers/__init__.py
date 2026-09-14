@@ -5,3 +5,4 @@ from .demand_router import router as demand_router
 from .order_router import router as order_router
 from .upload_router import router as upload_router
 from .notification_router import router as notification_router
+from .setting_router import router as setting_router

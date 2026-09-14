@@ -54,6 +54,17 @@ class FarmerPayoutRequest(BaseModel):
     notes: Optional[str] = "কৃষকের বিকাশ/ব্যাংক অ্যাকাউন্টে টাকা পরিশোধ করা হয়েছে"
     transaction_id: Optional[str] = ""
 
+class DepositPaymentRequest(BaseModel):
+    payment_method: str = "bkash"  # bkash, nagad, rocket
+    sender_phone: str = ""
+    transaction_id: str = ""
+    screenshot_url: Optional[str] = ""
+    notes: Optional[str] = ""
+
+class DepositRejectRequest(BaseModel):
+    rejection_reason: str = "টাকা পাওয়া যায়নি বা ট্রানজেকশন আইডি ভুল"
+    notes: Optional[str] = ""
+
 class OrderDisputeCreate(BaseModel):
     reason: str
     description: str
@@ -89,6 +100,11 @@ class OrderResponse(BaseModel):
     is_deposit_paid: bool
     payment_status: str = "unpaid"
     payment_verification_notes: Optional[str] = ""
+    deposit_payment_method: Optional[str] = ""
+    deposit_sender_phone: Optional[str] = ""
+    deposit_transaction_id: Optional[str] = ""
+    deposit_proof_url: Optional[str] = ""
+    deposit_admin_feedback: Optional[str] = ""
     order_status: str
     delivery_location: str
     expected_delivery_date: str

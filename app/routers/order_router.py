@@ -17,6 +17,8 @@ from app.schemas.order_schema import (
     QualityVerificationUpdate,
     PaymentConfirmRequest,
     InspectorAssignRequest,
+    DepositPaymentRequest,
+    DepositRejectRequest,
     QualityRejectRequest,
     RefundProcessRequest,
     FarmerPayoutRequest,
@@ -169,11 +171,12 @@ def create_order(
 @router.post("/{order_id}/pay-deposit", response_model=OrderResponse)
 def pay_deposit(
     order_id: str,
+    deposit_in: Optional[DepositPaymentRequest] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    Buyer submits 20% security deposit. Status becomes pending_verification for admin inspection.
+    Buyer submits 20% security deposit with proof (screenshot, sender phone, TrxID). Status becomes pending_verification for admin inspection.
     """
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
@@ -182,6 +185,16 @@ def pay_deposit(
     order.is_deposit_paid = True
     order.payment_status = "pending_verification"
     order.order_status = "paymentPending"
+    if deposit_in:
+        order.deposit_payment_method = deposit_in.payment_method
+        order.deposit_sender_phone = deposit_in.sender_phone
+        order.deposit_transaction_id = deposit_in.transaction_id
+        if deposit_in.screenshot_url:
+            order.deposit_proof_url = deposit_in.screenshot_url
+        if deposit_in.notes:
+            order.payment_verification_notes = deposit_in.notes
+        order.deposit_admin_feedback = ""  # Clear previous discrepancy feedback
+
     db.commit()
     db.refresh(order)
 
@@ -198,7 +211,44 @@ def pay_deposit(
         db=db,
         user_id=order.buyer_id,
         title="⏳ পেমেন্ট ভেরিফিকেশন পেন্ডিং",
-        message=f"আপনার ২০% জামানত (৳{order.deposit_required:,.2f}) গ্রহণের অনুরোধ জমা হয়েছে। এডমিন টাকা প্রাপ্তি নিশ্চিত করছেন।",
+        message=f"আপনার ২০% জামানত (৳{order.deposit_required:,.2f}) প্রুফসহ গৃহীত হয়েছে। এডমিন যাচাই করছেন।",
+        notification_type="order",
+        related_id=order.id
+    )
+
+    return order
+
+
+@router.post("/{order_id}/reject-deposit", response_model=OrderResponse)
+def reject_deposit(
+    order_id: str,
+    reject_in: DepositRejectRequest,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Admin reports discrepancy with buyer's deposit (e.g. money not received or TrxID incorrect) and sends message.
+    """
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="অর্ডারটি পাওয়া যায়নি।")
+
+    order.payment_status = "deposit_discrepancy"
+    order.is_deposit_paid = False
+    order.order_status = "paymentPending"
+    order.deposit_admin_feedback = reject_in.rejection_reason
+    if reject_in.notes:
+        order.payment_verification_notes = reject_in.notes
+
+    db.commit()
+    db.refresh(order)
+
+    # Send notification to buyer with admin's feedback
+    send_in_app_notification(
+        db=db,
+        user_id=order.buyer_id,
+        title="⚠️ ডিপোজিট পেমেন্টে অমিল পাওয়া গেছে",
+        message=f"অর্ডার নং {order.order_number} এর জামানত যাচাইয়ে অ্যাডমিনের বার্তা: {reject_in.rejection_reason}। অনুগ্রহ করে সংশোধন করে পুনরায় পাঠান।",
         notification_type="order",
         related_id=order.id
     )
