@@ -34,7 +34,9 @@ class Order(Base):
     farmer_payout_notes = Column(Text, default="")
     farmer_payout_date = Column(String, default="")
 
-    deposit_required = Column(Float, nullable=False)  # 20% security deposit
+    deposit_required = Column(Float, nullable=False)  # Advance fee payable (Delivery charge + 5% service fee)
+    delivery_charge = Column(Float, default=0.0)  # Calculated from delivery chart
+    advance_payable_amount = Column(Float, default=0.0)  # buyer_service_fee + delivery_charge
     is_deposit_paid = Column(Boolean, default=False)
     order_status = Column(String, default="pending")
     delivery_location = Column(String, nullable=False)

@@ -26,6 +26,7 @@ from app.schemas.order_schema import (
 )
 from app.utils import get_current_user
 from app.routers.notification_router import send_in_app_notification
+from app.routers.setting_router import calculate_delivery_charge_internal
 
 router = APIRouter(prefix="/orders", tags=["Orders & Transport (অর্ডার ও পরিবহন)"])
 
@@ -113,8 +114,17 @@ def create_order(
     new_id = f"ord_{uuid.uuid4().hex[:8]}"
     order_num = f"KB-{uuid.uuid4().hex[:6].upper()}"
     total = order_in.quantity * order_in.price_per_unit
-    deposit = round(total * 0.20, 2)  # 20% deposit
+    
+    # Calculate delivery charge from admin delivery chart (or client-specified)
+    del_charge = order_in.delivery_charge if (order_in.delivery_charge is not None and order_in.delivery_charge > 0) else calculate_delivery_charge_internal(
+        db=db,
+        product_name=order_in.product_title,
+        quantity=order_in.quantity,
+        unit=order_in.unit,
+        category=order_in.category
+    )
     buyer_fee = round(total * 0.05, 2)  # 5% extra platform service fee for buyer
+    advance_amount = round(del_charge + buyer_fee, 2)  # Advance fee payable (Delivery + Service fee; 20% deposit eliminated)
     buyer_total = round(total + buyer_fee, 2)
     farmer_fee = round(total * 0.05, 2)  # 5% platform fee deducted from farmer
     farmer_payout = round(total - farmer_fee, 2)
@@ -142,7 +152,9 @@ def create_order(
         farmer_service_fee=farmer_fee,
         farmer_payout_amount=farmer_payout,
         farmer_payout_status="unpaid",
-        deposit_required=deposit,
+        deposit_required=advance_amount,
+        delivery_charge=del_charge,
+        advance_payable_amount=advance_amount,
         is_deposit_paid=False,
         order_status="pending",
         delivery_location=order_in.delivery_location,
@@ -202,8 +214,8 @@ def pay_deposit(
     send_in_app_notification(
         db=db,
         user_id=order.farmer_id,
-        title="💰 ক্রেতা ডিপোজিট জমা দিয়েছেন!",
-        message=f"অর্ডার নং {order.order_number} এর ২০% জামানত (৳{order.deposit_required:,.2f}) জমা হয়েছে। এডমিন পেমেন্ট ভেরিফাই করছেন।",
+        title="💰 ক্রেতা ডেলিভারি ও সার্ভিস চার্জ জমা দিয়েছেন!",
+        message=f"অর্ডার নং {order.order_number} এর ডেলিভারি ও সার্ভিস চার্জ (৳{order.deposit_required:,.2f}) জমা হয়েছে। এডমিন পেমেন্ট যাচাই করছেন।",
         notification_type="order",
         related_id=order.id
     )
@@ -211,7 +223,7 @@ def pay_deposit(
         db=db,
         user_id=order.buyer_id,
         title="⏳ পেমেন্ট ভেরিফিকেশন পেন্ডিং",
-        message=f"আপনার ২০% জামানত (৳{order.deposit_required:,.2f}) প্রুফসহ গৃহীত হয়েছে। এডমিন যাচাই করছেন।",
+        message=f"আপনার ডেলিভারি ও সার্ভিস চার্জ (৳{order.deposit_required:,.2f}) প্রুফসহ গৃহীত হয়েছে। এডমিন যাচাই করছেন।",
         notification_type="order",
         related_id=order.id
     )
@@ -285,20 +297,19 @@ def confirm_order_payment(
     db.refresh(order)
 
     # Notify buyer & farmer
-    inspector_label = f"{order.inspector_name} ({order.inspector_designation})" if order.inspector_name else "ইন্সপেকশন টিম"
     send_in_app_notification(
         db=db,
         user_id=order.buyer_id,
-        title="💰 টাকা পাওয়া গেছে - কনফার্মড!",
-        message=f"অর্ডার নং {order.order_number} এর ২০% জামানতের টাকা কৃষিবাজার অ্যাকাউন্টে জমা হয়েছে। কালেকশন হাবে পণ্য পরীক্ষার জন্য {inspector_label} নিযুক্ত করা হয়েছে।",
+        title="💰 পেমেন্ট কনফার্মড!",
+        message=f"অর্ডার নং {order.order_number} এর ডেলিভারি ও সার্ভিস চার্জ প্রাপ্তি নিশ্চিত হয়েছে। পণ্য পরিবহনে প্রেরণের প্রস্তুতি চলছে।",
         notification_type="order",
         related_id=order.id
     )
     send_in_app_notification(
         db=db,
         user_id=order.farmer_id,
-        title="💰 ক্রেতার ডিপোজিট কনফার্মড!",
-        message=f"অর্ডার নং {order.order_number} এর ২০% জামানতের টাকা নিশ্চিত হয়েছে। কালেকশন হাবে পণ্য যাচাইয়ের জন্য পাঠানো শুরু করুন।",
+        title="💰 ক্রেতার পেমেন্ট কনফার্মড!",
+        message=f"অর্ডার নং {order.order_number} এর ডেলিভারি ও সার্ভিস চার্জ নিশ্চিত হয়েছে। পণ্য পরিবহনে লোড করা হচ্ছে।",
         notification_type="order",
         related_id=order.id
     )
@@ -356,7 +367,7 @@ def verify_order_quality(
 ):
     """
     Quality and weight inspection at collection hub (performed via Admin Dashboard).
-    Marks product as passed and updates verification data.
+    Marks product as passed, sets status to qualityApproved so buyer can now pay delivery + service charges!
     """
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
@@ -374,7 +385,7 @@ def verify_order_quality(
         order.verification_notes = verification_in.verification_notes
     order.is_quality_verified = True
     order.is_quality_passed = True
-    order.order_status = "collectionVerified"
+    order.order_status = "qualityApproved"
 
     db.commit()
     db.refresh(order)
@@ -383,8 +394,8 @@ def verify_order_quality(
     send_in_app_notification(
         db=db,
         user_id=order.buyer_id,
-        title="✅ পণ্যের মান ও ওজন যাচাই সম্পন্ন!",
-        message=f"অর্ডার নং {order.order_number} এর গুণমান যাচাই সম্পন্ন হয়েছে (গ্রেড: {order.quality_grade}, প্রকৃত ওজন: {order.actual_weight} {order.unit})। পণ্য এখন পরিবহনের জন্য প্রস্তুত।",
+        title="✅ পণ্যের হাব যাচাই সম্পন্ন — পণ্য ঠিকঠাক আছে!",
+        message=f"অর্ডার নং {order.order_number} হাবে পরীক্ষায় উত্তীর্ণ হয়েছে (গ্রেড: {order.quality_grade}, ওজন: {order.actual_weight} {order.unit})। ডেলিভারি শুরু করার জন্য অনুগ্রহ করে ডেলিভারি চার্জ (৳{order.delivery_charge:,.2f}) ও ৫% সার্ভিস চার্জ (৳{order.buyer_service_fee:,.2f}) মোট ৳{order.deposit_required:,.2f} পরিশোধ করুন।",
         notification_type="order",
         related_id=order.id
     )
@@ -392,7 +403,7 @@ def verify_order_quality(
         db=db,
         user_id=order.farmer_id,
         title="✅ পণ্যের হাব যাচাই সম্পন্ন!",
-        message=f"অর্ডার নং {order.order_number} কালেকশন হাবে ইন্সপেকশন সফল হয়েছে।",
+        message=f"অর্ডার নং {order.order_number} কালেকশন হাবে পরীক্ষায় উত্তীর্ণ হয়েছে। পাইকারের পেমেন্ট সম্পন্ন হলেই পরিবহন পাঠানো হবে।",
         notification_type="order",
         related_id=order.id
     )
@@ -408,7 +419,8 @@ def reject_order_quality(
     db: Session = Depends(get_db)
 ):
     """
-    Admin rejects order quality at collection hub. Prompts buyer to look for alternatives and queues 20% deposit refund.
+    Admin rejects order quality at collection hub. Prompts buyer to look for alternatives.
+    No refund needed since buyer has not paid yet.
     """
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
@@ -424,9 +436,9 @@ def reject_order_quality(
         order.inspector_designation = reject_in.inspector_designation
 
     order.order_status = "qualityRejected"
-    order.payment_status = "refund_pending"
-    order.refund_status = "pending"
-    order.refund_amount = order.deposit_required
+    order.payment_status = "cancelled"
+    order.refund_status = "none"
+    order.refund_amount = 0.0
 
     db.commit()
     db.refresh(order)
@@ -436,7 +448,7 @@ def reject_order_quality(
         db=db,
         user_id=order.buyer_id,
         title="⚠️ পণ্যের মান সন্তোষজনক পাওয়া যায়নি",
-        message=f"অর্ডার নং {order.order_number} হাবে পরীক্ষার পর মানসম্মত না হওয়ায় বাতিল করা হয়েছে। আপনার ২০% জামানতের টাকা রিফান্ড পেন্ডিং রয়েছে। অনুগ্রহ করে অন্য পণ্য অনুসন্ধান করুন।",
+        message=f"অর্ডার নং {order.order_number} হাবে পরীক্ষার পর মানসম্মত না হওয়ায় বাতিল করা হয়েছে। আপনি কোনো টাকা প্রদান করেননি, তাই রিফান্ডের প্রয়োজন নেই। অন্য পণ্য অনুসন্ধান করুন।",
         notification_type="order",
         related_id=order.id
     )
@@ -444,7 +456,7 @@ def reject_order_quality(
         db=db,
         user_id=order.farmer_id,
         title="⚠️ সরবরাহকৃত পণ্যের মান কালেকশন হাবে উত্তীর্ণ হয়নি",
-        message=f"অর্ডার নং {order.order_number} এর পণ্য কোয়ালিটি টেস্টে উত্তীর্ণ হয়নি। কারণ: {order.rejection_reason}। ভবিষ্যতে উন্নত পণ্য সরবরাহ করুন।",
+        message=f"অর্ডার নং {order.order_number} এর পণ্য কোয়ালিটি টেস্টে উত্তীর্ণ হয়নি। কারণ: {order.rejection_reason}।",
         notification_type="order",
         related_id=order.id
     )

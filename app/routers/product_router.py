@@ -7,10 +7,14 @@ from jose import jwt, JWTError
 
 from app.database import get_db
 from app.config import settings
-from app.models.product_model import Product
+from app.models.product_model import Product, ProductOffer
 from app.models.user_model import User
-from app.schemas.product_schema import ProductCreate, ProductUpdate, ProductResponse
+from app.schemas.product_schema import (
+    ProductCreate, ProductUpdate, ProductResponse,
+    ProductOfferCreate, ProductOfferResponse
+)
 from app.utils import get_current_user
+from app.routers.notification_router import send_in_app_notification
 
 router = APIRouter(prefix="/products", tags=["Products (কৃষি পণ্য)"])
 
@@ -49,6 +53,7 @@ def _serialize_product(product: Product) -> ProductResponse:
         video_url=product.video_url or "",
         video_note=product.video_note or "",
         status=product.status,
+        offers_count=product.offers_count or 0,
         created_at=product.created_at
     )
 
@@ -256,4 +261,244 @@ def delete_product(
     product.status = "archived"
     db.commit()
     return {"success": True, "message": "পণ্যটি সফলভাবে আর্কাইভ/মুছে ফেলা হয়েছে।"}
+
+
+# ================= Product Purchase Proposals / Offers =================
+
+def _resolve_buyer(
+    authorization: Optional[str],
+    buyer_id: Optional[str],
+    db: Session
+) -> Optional[User]:
+    """Resolve current buyer from JWT token or buyer_id"""
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ")[1].strip()
+        try:
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            user_id = payload.get("sub")
+            if user_id:
+                user = db.query(User).filter(User.id == user_id).first()
+                if user:
+                    return user
+        except JWTError:
+            pass
+
+    if buyer_id:
+        return db.query(User).filter(User.id == buyer_id).first()
+    return None
+
+
+@router.post("/{product_id}/offers", response_model=ProductOfferResponse, status_code=status.HTTP_201_CREATED)
+def create_product_offer(
+    product_id: str,
+    offer_in: ProductOfferCreate,
+    authorization: Optional[str] = Header(None),
+    buyer_id: Optional[str] = Query(None),
+    user_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Buyer (Paikar) submits a purchase proposal for a Farmer's product.
+    Automatically increments product offers_count and sends an in-app notification to the farmer.
+    """
+    product = db.query(Product).filter(Product.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="পণ্যটি পাওয়া যায়নি।")
+
+    user = _resolve_buyer(authorization, offer_in.buyer_id or buyer_id or user_id, db)
+
+    b_id = user.id if user else (offer_in.buyer_id or buyer_id or user_id or f"buy_{uuid.uuid4().hex[:8]}")
+    b_name = (user.name if user and user.name else None) or offer_in.buyer_name or "পাইকার"
+    b_biz = (user.business_name if user and user.business_name else None) or offer_in.buyer_business_name or b_name
+    b_phone = (user.phone if user and user.phone else None) or offer_in.buyer_phone or ""
+    b_dist = (user.district if user and user.district else None) or offer_in.buyer_district or "বাংলাদেশ"
+    b_photo = user.photo_url if user and user.photo_url else ""
+    b_verified = (user.verification_status == "verified") if user else True
+
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    new_offer = ProductOffer(
+        id=f"po_{uuid.uuid4().hex[:8]}",
+        product_id=product_id,
+        buyer_id=b_id,
+        buyer_name=b_name,
+        buyer_business_name=b_biz,
+        buyer_phone=b_phone,
+        buyer_district=b_dist,
+        buyer_photo_url=b_photo,
+        buyer_verified=b_verified,
+        offered_quantity=offer_in.offered_quantity,
+        unit=offer_in.unit or product.unit,
+        price_per_unit=offer_in.price_per_unit,
+        delivery_location=offer_in.delivery_location or "",
+        expected_delivery_date=offer_in.expected_delivery_date or "",
+        note=offer_in.note or "",
+        status="pending",
+        created_at=now_str
+    )
+
+    db.add(new_offer)
+
+    # Increment offers_count on product
+    product.offers_count = (product.offers_count or 0) + 1
+    db.commit()
+    db.refresh(new_offer)
+
+    # In-app notification to the farmer
+    try:
+        if product.farmer_id:
+            send_in_app_notification(
+                db=db,
+                user_id=product.farmer_id,
+                title="আপনার পণ্যে নতুন ক্রয় প্রস্তাব! 🛍️",
+                message=f"{b_biz} আপনার '{product.title}' পণ্যে প্রতি {new_offer.unit} ৳{new_offer.price_per_unit:.0f} দরে মোট {new_offer.offered_quantity:g} {new_offer.unit} ক্রয়ের প্রস্তাব দিয়েছেন।",
+                notification_type="product_offer",
+                related_id=product_id
+            )
+    except Exception as e:
+        print(f"Error sending notification to farmer: {e}")
+
+    return new_offer
+
+
+@router.get("/{product_id}/offers", response_model=List[ProductOfferResponse])
+def get_offers_for_product(product_id: str, db: Session = Depends(get_db)):
+    """
+    Get all buyer purchase proposals for a specific product.
+    Enriches with buyer latest profile details.
+    """
+    offers = db.query(ProductOffer).filter(ProductOffer.product_id == product_id).order_by(ProductOffer.created_at.desc()).all()
+    buyer_ids = {o.buyer_id for o in offers if o.buyer_id}
+    buyer_map = {u.id: u for u in db.query(User).filter(User.id.in_(buyer_ids)).all()} if buyer_ids else {}
+
+    results = []
+    for o in offers:
+        res = ProductOfferResponse.model_validate(o)
+        u = buyer_map.get(o.buyer_id)
+        if u:
+            if u.photo_url:
+                res.buyer_photo_url = u.photo_url
+            if u.phone:
+                res.buyer_phone = u.phone
+            if u.district:
+                res.buyer_district = u.district
+            if u.business_name:
+                res.buyer_business_name = u.business_name
+            res.buyer_verified = (u.verification_status == "verified")
+        results.append(res)
+    return results
+
+
+@router.post("/offers/{offer_id}/accept")
+def accept_product_offer(offer_id: str, db: Session = Depends(get_db)):
+    """
+    Farmer accepts a buyer's purchase proposal.
+    Updates offer status to 'accepted' and sends notification to buyer.
+    """
+    offer = db.query(ProductOffer).filter(ProductOffer.id == offer_id).first()
+    if not offer:
+        raise HTTPException(status_code=404, detail="প্রস্তাব পাওয়া যায়নি।")
+
+    offer.status = "accepted"
+    db.commit()
+    db.refresh(offer)
+
+    # Notify buyer
+    product = db.query(Product).filter(Product.id == offer.product_id).first()
+    prod_title = product.title if product else "কৃষি পণ্য"
+    farmer_name = product.farmer_name if product else "কৃষক"
+    try:
+        send_in_app_notification(
+            db=db,
+            user_id=offer.buyer_id,
+            title="আপনার ক্রয় প্রস্তাব গৃহীত হয়েছে! ✅",
+            message=f"{farmer_name} আপনার '{prod_title}' ক্রয়ের প্রস্তাব (৳{offer.price_per_unit:.0f}/{offer.unit}) গ্রহণ করেছেন। বিস্তারিত দেখতে যোগাযোগ করুন।",
+            notification_type="product_offer_accepted",
+            related_id=offer.product_id
+        )
+    except Exception as e:
+        print(f"Error notifying buyer: {e}")
+
+    return {
+        "success": True,
+        "message": "প্রস্তাবটি সফলভাবে গ্রহণ করা হয়েছে!",
+        "data": ProductOfferResponse.model_validate(offer)
+    }
+
+
+@router.post("/offers/{offer_id}/reject")
+def reject_product_offer(offer_id: str, db: Session = Depends(get_db)):
+    """
+    Farmer rejects a buyer's purchase proposal.
+    """
+    offer = db.query(ProductOffer).filter(ProductOffer.id == offer_id).first()
+    if not offer:
+        raise HTTPException(status_code=404, detail="প্রস্তাব পাওয়া যায়নি।")
+
+    offer.status = "rejected"
+    db.commit()
+    db.refresh(offer)
+
+    product = db.query(Product).filter(Product.id == offer.product_id).first()
+    prod_title = product.title if product else "কৃষি পণ্য"
+    try:
+        send_in_app_notification(
+            db=db,
+            user_id=offer.buyer_id,
+            title="ক্রয় প্রস্তাব প্রত্যাখ্যান করা হয়েছে ❌",
+            message=f"আপনার '{prod_title}' ক্রয়ের প্রস্তাবটি কৃষক এই মুহূর্তে গ্রহণ করতে পারছেন না।",
+            notification_type="product_offer_rejected",
+            related_id=offer.product_id
+        )
+    except Exception as e:
+        print(f"Error notifying buyer: {e}")
+
+    return {
+        "success": True,
+        "message": "প্রস্তাবটি প্রত্যাখ্যান করা হয়েছে।",
+        "data": ProductOfferResponse.model_validate(offer)
+    }
+
+
+@router.get("/offers/my-proposals", response_model=List[ProductOfferResponse])
+def get_my_product_proposals(
+    authorization: Optional[str] = Header(None),
+    buyer_id: Optional[str] = Query(None),
+    user_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Buyer views all purchase proposals they have submitted for products.
+    """
+    user = _resolve_buyer(authorization, buyer_id or user_id, db)
+    target_id = user.id if user else (buyer_id or user_id)
+    if not target_id:
+        raise HTTPException(status_code=400, detail="Buyer ID or Authorization required")
+
+    return db.query(ProductOffer).filter(
+        ProductOffer.buyer_id == str(target_id).strip()
+    ).order_by(ProductOffer.created_at.desc()).all()
+
+
+@router.get("/{product_id}/my-offer", response_model=Optional[ProductOfferResponse])
+def get_my_offer_for_product(
+    product_id: str,
+    authorization: Optional[str] = Header(None),
+    buyer_id: Optional[str] = Query(None),
+    user_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Get current buyer's purchase proposal for this specific product, if any.
+    """
+    user = _resolve_buyer(authorization, buyer_id or user_id, db)
+    target_id = user.id if user else (buyer_id or user_id)
+    if not target_id:
+        return None
+
+    return db.query(ProductOffer).filter(
+        ProductOffer.product_id == product_id,
+        ProductOffer.buyer_id == str(target_id).strip()
+    ).order_by(ProductOffer.created_at.desc()).first()
+
+
 

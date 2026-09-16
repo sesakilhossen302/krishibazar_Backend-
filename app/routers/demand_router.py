@@ -14,6 +14,7 @@ from app.schemas.demand_schema import DemandCreate, DemandUpdate, DemandResponse
 from app.schemas.order_schema import OrderResponse
 from app.utils import get_current_user
 from app.routers.notification_router import send_in_app_notification
+from app.routers.setting_router import calculate_delivery_charge_internal
 
 router = APIRouter(prefix="/demands", tags=["Demands & Offers (চাহিদা ও দরপত্র)"])
 
@@ -368,8 +369,15 @@ def accept_offer(
     new_order_id = f"ord_{uuid.uuid4().hex[:8]}"
     order_num = f"KB-{uuid.uuid4().hex[:6].upper()}"
     total = offer.offered_quantity * offer.price_per_unit
-    deposit = round(total * 0.20, 2)
+    del_charge = calculate_delivery_charge_internal(
+        db=db,
+        product_name=demand.product_title,
+        quantity=offer.offered_quantity,
+        unit=offer.unit,
+        category=demand.category
+    )
     buyer_fee = round(total * 0.05, 2)
+    advance_amount = round(del_charge + buyer_fee, 2)  # Advance fee payable (Delivery charge + 5% service fee)
     buyer_total = round(total + buyer_fee, 2)
     farmer_fee = round(total * 0.05, 2)
     farmer_payout = round(total - farmer_fee, 2)
@@ -404,7 +412,9 @@ def accept_offer(
         farmer_service_fee=farmer_fee,
         farmer_payout_amount=farmer_payout,
         farmer_payout_status="unpaid",
-        deposit_required=deposit,
+        deposit_required=advance_amount,
+        delivery_charge=del_charge,
+        advance_payable_amount=advance_amount,
         is_deposit_paid=False,
         order_status="pending",
         delivery_location=demand.required_location,

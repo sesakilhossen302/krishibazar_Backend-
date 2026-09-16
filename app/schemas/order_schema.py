@@ -10,6 +10,7 @@ class OrderCreate(BaseModel):
     price_per_unit: float
     delivery_location: str
     expected_delivery_date: str
+    delivery_charge: Optional[float] = None
 
 class OrderStatusUpdate(BaseModel):
     order_status: str  # pending, paymentConfirmed, processing, pickupReady, inTransit, delivered, completed, cancelled
@@ -97,6 +98,8 @@ class OrderResponse(BaseModel):
     farmer_payout_notes: Optional[str] = ""
     farmer_payout_date: Optional[str] = ""
     deposit_required: float
+    delivery_charge: Optional[float] = 0.0
+    advance_payable_amount: Optional[float] = 0.0
     is_deposit_paid: bool
     payment_status: str = "unpaid"
     payment_verification_notes: Optional[str] = ""

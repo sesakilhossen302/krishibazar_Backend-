@@ -61,8 +61,48 @@ class ProductResponse(BaseModel):
     video_url: Optional[str] = ""
     video_note: Optional[str] = ""
     status: str
+    offers_count: Optional[int] = 0
     created_at: str
 
     class Config:
         from_attributes = True
+
+
+class ProductOfferCreate(BaseModel):
+    product_id: str
+    buyer_id: Optional[str] = None
+    buyer_name: Optional[str] = None
+    buyer_business_name: Optional[str] = None
+    buyer_phone: Optional[str] = None
+    buyer_district: Optional[str] = None
+    offered_quantity: float
+    unit: Optional[str] = "কেজি (kg)"
+    price_per_unit: float
+    delivery_location: Optional[str] = ""
+    expected_delivery_date: Optional[str] = ""
+    note: Optional[str] = ""
+
+
+class ProductOfferResponse(BaseModel):
+    id: str
+    product_id: str
+    buyer_id: str
+    buyer_name: str
+    buyer_business_name: str
+    buyer_phone: str
+    buyer_district: str
+    buyer_photo_url: Optional[str] = ""
+    buyer_verified: bool = True
+    offered_quantity: float
+    unit: str
+    price_per_unit: float
+    delivery_location: Optional[str] = ""
+    expected_delivery_date: Optional[str] = ""
+    note: Optional[str] = ""
+    status: str
+    created_at: str
+
+    class Config:
+        from_attributes = True
+
 
